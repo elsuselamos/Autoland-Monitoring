@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(curl:*)",
+      "Bash(npm install:*)",
+      "Bash(python:*)"
+    ]
+  }
+}

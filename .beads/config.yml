@@ -1,0 +1,24 @@
+# Beads Configuration for Autoland Monitoring
+
+# Project directory
+directory: autoland-monitoring
+
+# Default epic type
+defaultType: epic
+
+# Issue templates
+defaults:
+  type: feature
+  priority: 2
+  labels: []
+
+# Epic configurations
+epics:
+  priorityMap:
+    0: critical
+    1: high
+    2: medium
+    3: low
+    4: backlog
+
+

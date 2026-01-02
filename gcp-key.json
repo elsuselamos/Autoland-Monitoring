@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "autoland-monitoring",
+  "private_key_id": "fac88fa5b32c5c73fdaa3364e524181fcfe799a1",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDer1uSrBVOATDP\nsnqTncuZwDBw7wyCRnU5aLtR5hhBtcc1sr6Hoden6qo6OMDbAfCx7/phrk2DHDwG\nBml/A4w6oPrPGOEAV/Uyvjney6UwRi0jJn9AJ5sDpMpCnvrn8+/RkcR2OptRR8z7\nMg+g3FpdBaF2wF/NnLD1dxG4jk+h3Zu5R4jfia/3+Rck5YRVBV4GDrwZ5bHFIwko\ndDTN1iQtFAao8Bj278u0LYxKUeMmUJNesl9kN0rewbmHsMBnLmwF3lhA5Zuw0fQy\nOoag2mMj8VF5pBTDBr1SS7zAQu2KjUjoInTzT1zTWIM5qhsCWEguJwiKE045ScHV\n9oLCasXhAgMBAAECggEAJUHnq1mZUuzGEuoEsjADgZzzPeHxENbjBBDuzlwWEOBu\nDSDz2dONNm3/vzABrGLdt5e0J6W3GEmgDU4DVpnsW17Vt9Ksypbs0mmbWxhtce87\n3Baz0bMOr4RhxtW8mxRoOoMOAM37cJT3yctta/eSMuAfTLQRE2C1Bsy+LUe6MRWH\n64VHAHcY/Guf6/r2BRRsx3+EiPwSyGN50MxpAVdXG+hGN1g1mQiUK7xW+B5l6ARR\n3b3hIHssG7dF/E6+699k/eb4RC8pUJbfVpv+sWbR2mDwGzku4OVkwcTGc4mZUGNl\n4dssbK7bZoA0EgGl6B3g7N41ro9bgY5EggSLacfCcQKBgQD1xzKX/f6dRkeJ4KfX\nbAHoPjtnQEavUsLmgovvi7OAMii0VJGfgCtTllrNLU8uu4vlZu3HLbY8MPSVLuLR\nB+rlomIrRLbHKaUjAUelapuGcfFS8sl/dDDvCa6ryOKbGogACyRch4Fp5qqd3cZu\n0aPI4xhJiJaG3pn+dzuNvn9ZhQKBgQDn8kmNi6WzkPha9oV9p6ejurKTJsrKZzWp\nkGZBb2ui2o0jCZQgk4Dl7vopxm5naK9jyv6LgPNlsiKNZRdbJp3VmR0yNhLTUd6V\nP4hpCRqTK8JwsJ1pY+89IaiGRxrqMYcEhUbKm96R7sQzzM1U4L8egJzMwzhS4MYU\n2C4kJTVbrQKBgQDXcU3APj26z6hWDEAUbfEeC682yvkrJnkCZt0Tlno6nb1gleEw\n18Ei/GGMCXOnm27+IEO+nStph+BeBUN9yFr4AGfdVdaCrta64JxVPCYorCjGdVx8\nBPYAE5SxsN4y6AbfQuUU1xNyKWjWCVmwOsQ/jBH2I20PvIFwtkPV9G7doQKBgBB+\nFeTOrTWbdU1ighNxPGZT/Caid4D03cf00JCOj6TAzZBUOggm9N9kor0dsvP/aZk6\n8eaRgL0WcYaETajZkheCD6VmWuhTxfPu1JBDaXRVhDnnFQpNZNF/9y+1FqDYbLVR\nlLsLYkQWKjVUtrT2ViChHIUizHp4KR2KUZ2YV7bxAoGBAOzEBxTquzJpy/+8jrWO\n8HyDi6yPmj1pXpxVu50iWPepDef6ArYypxKb2kaSZ8wsheaJAcTvupAabsQX6i2l\nuc2GmUNATyTlowVYajuFts5n/Jd4qZrgRylJQBlqgscl561PaOa/S0kKY23eVJQO\nhFtTBa7oAERmDw/6UrUzySRk\n-----END PRIVATE KEY-----\n",
+  "client_email": "autoland-service@autoland-monitoring.iam.gserviceaccount.com",
+  "client_id": "101098661078120213466",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/autoland-service%40autoland-monitoring.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
