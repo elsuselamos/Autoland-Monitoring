@@ -1,0 +1,25 @@
+{
+  "name": "renew-gmail-watch",
+  "version": "1.0.0",
+  "description": "Cloud Function to automatically renew Gmail Watch for Autoland Monitoring System",
+  "main": "index.js",
+  "scripts": {
+    "deploy": "gcloud functions deploy renew-gmail-watch --gen2 --runtime=nodejs20 --region=asia-southeast1 --source=. --entry-point=renewGmailWatch --trigger-http --allow-unauthenticated",
+    "test": "node index.js"
+  },
+  "keywords": [
+    "gmail",
+    "watch",
+    "renew",
+    "cloud-function",
+    "autoland"
+  ],
+  "author": "Vietjet AMO ICT Department",
+  "license": "MIT",
+  "dependencies": {
+    "googleapis": "^126.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

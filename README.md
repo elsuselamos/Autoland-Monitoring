@@ -561,38 +561,129 @@ node scripts/setup-gmail-watch.js
 6. Paste vào terminal khi script hỏi
 7. Script sẽ tự động extract code và setup Gmail Watch
 
-**Lưu ý:** 
+**Lưu ý:**
 - Gmail Watch expires sau 7 ngày, cần renew định kỳ
 - Refresh token sẽ được lưu để có thể refresh access token khi cần
 - Xem phần "Setup Cloud Scheduler để tự động renew Watch" bên dưới
 
-### Setup Cloud Scheduler để tự động renew Watch:
+### Setup Gmail Watch Renewal Automation
 
-Để tự động renew Gmail Watch hàng tuần (trước khi hết hạn 7 ngày):
+Gmail Watch API có limitation là **watch request chỉ có hiệu lực trong 7 ngày**. Sau đó, bạn sẽ không nhận được notifications nữa.
+
+**2 Options:**
+
+#### Option 1: Automatic Renewal (Production - Khuyến nghị)
+
+Cloud Scheduler tự động gọi Cloud Function mỗi 6 ngày để renew Gmail Watch.
 
 ```bash
+# --- Step 1: Get Refresh Token ---
+export MANUAL_FLOW=true
+export GCP_PROJECT_ID="autoland-monitoring"
+export GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export GOOGLE_CLIENT_SECRET="GOCSPX-your-client-secret"
+export GOOGLE_REDIRECT_URI="http://localhost:3000/oauth2callback"
+export PUBSUB_TOPIC="gmail-notifications"
+
+node scripts/setup-gmail-watch.js
+# Copy refresh token từ output (bắt đầu bằng "1//0g...")
+
+# --- Step 2: Store Refresh Token in Secret Manager ---
 export PROJECT_ID="autoland-monitoring"
+export REFRESH_TOKEN="1//0g..."  # Thay bằng refresh token thực tế
+
+echo -n "$REFRESH_TOKEN" | gcloud secrets create gmail-oauth-refresh-token \
+  --data-file=- --project=$PROJECT_ID
+
+gcloud secrets add-iam-policy-binding gmail-oauth-refresh-token \
+  --member="serviceAccount:autoland-service@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor" --project=$PROJECT_ID
+
+# --- Step 3: Deploy Cloud Function ---
+cd cloud-functions/renew-gmail-watch
+npm install
+
 export REGION="asia-southeast1"
-export FUNCTION_NAME="gmail-pubsub-processor"  # Hoặc tạo Cloud Function riêng
-export SCHEDULER_NAME="renew-gmail-watch"
 export SA_EMAIL="autoland-service@$PROJECT_ID.iam.gserviceaccount.com"
 
-# Tạo Cloud Scheduler job (chạy mỗi 6 ngày một lần)
-gcloud scheduler jobs create http $SCHEDULER_NAME \
-  --location=$REGION \
-  --schedule="0 0 * * 0" \
-  --uri="https://$REGION-$PROJECT_ID.cloudfunctions.net/$FUNCTION_NAME/renew-watch" \
-  --http-method=POST \
-  --oidc-service-account-email=$SA_EMAIL \
+gcloud functions deploy renew-gmail-watch \
+  --gen2 --runtime=nodejs20 --region=$REGION --source=. \
+  --entry-point=renewGmailWatch --trigger-http \
+  --service-account=$SA_EMAIL \
+  --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID" \
+  --set-env-vars="PUBSUB_TOPIC=gmail-notifications" \
+  --set-env-vars="GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
+  --set-secrets="GOOGLE_CLIENT_SECRET=google-client-secret:latest" \
+  --set-secrets="OAUTH_REFRESH_TOKEN=gmail-oauth-refresh-token:latest" \
+  --memory=256Mi --timeout=60s --allow-unauthenticated \
+  --project=$PROJECT_ID
+
+# --- Step 4: Create Cloud Scheduler Job ---
+gcloud scheduler jobs create http renew-gmail-watch-weekly \
+  --location=$REGION --schedule="0 0 */6 * *" \
+  --uri="https://$REGION-$PROJECT_ID.cloudfunctions.net/renew-gmail-watch" \
+  --http-method=POST --oidc-service-account-email=$SA_EMAIL \
   --project=$PROJECT_ID
 ```
 
-**Hoặc chạy script thủ công mỗi tuần:**
+**Cron Schedule:**
+- `0 0 */6 * *` - Mỗi 6 ngày lúc 00:00 UTC (khuyến nghị)
+- `0 2 * * 0` - Mỗi Chủ nhật lúc 02:00 UTC (weekly)
+- `0 0 * * 1` - Mỗi Thứ Hai lúc 00:00 UTC (weekly)
+
+#### Option 2: Manual Renewal (Development/Testing)
+
+Chạy thủ công mỗi tuần để renew Gmail Watch:
 
 ```bash
-# Set environment variables và chạy lại script
+export GCP_PROJECT_ID="autoland-monitoring"
+export GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+export GOOGLE_CLIENT_SECRET="GOCSPX-your-client-secret"
+export GOOGLE_REDIRECT_URI="http://localhost:3000/oauth2callback"
+export PUBSUB_TOPIC="gmail-notifications"
 export MANUAL_FLOW=true
+
 node scripts/setup-gmail-watch.js
+```
+
+### Monitor & Troubleshoot
+
+```bash
+# Test Cloud Function manually
+curl -X POST https://asia-southeast1-autoland-monitoring.cloudfunctions.net/renew-gmail-watch
+
+# View Cloud Function logs
+gcloud functions logs read renew-gmail-watch --region=asia-southeast1 --limit=50 --project=$PROJECT_ID
+
+# View Cloud Scheduler logs
+gcloud scheduler jobs logs describe renew-gmail-watch-weekly --location=asia-southeast1 --project=$PROJECT_ID
+
+# Manually trigger scheduler job
+gcloud scheduler jobs run renew-gmail-watch-weekly --location=asia-southeast1 --project=$PROJECT_ID
+
+# Update refresh token (nếu bị revoke)
+export NEW_REFRESH_TOKEN="1//0g..."
+echo -n "$NEW_REFRESH_TOKEN" | gcloud secrets versions add gmail-oauth-refresh-token \
+  --data-file=- --project=$PROJECT_ID
+```
+
+**Common Errors:**
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| `Invalid Credentials` | Refresh token revoked | Run `setup-gmail-watch.js` again to get new token |
+| `Permission Denied` | SA lacks secret access | Grant `roles/secretmanager.secretAccessor` role |
+| `redirect_uri_mismatch` | OAuth2 URI not configured | Add `http://localhost:3000/oauth2callback` to OAuth client |
+
+**Architecture:**
+```
+Cloud Scheduler (every 6 days)
+    ↓
+Cloud Function (renew-gmail-watch)
+    ↓
+Gmail API (users.watch)
+    ↓
+Pub/Sub Topic (gmail-notifications)
 ```
 
 ---
@@ -1089,6 +1180,44 @@ SELECT
   COALESCE(SUM(extraction_cost_saved), 0) as saved_cost
 FROM autoland_reports;
 "
+
+# --- Gmail Watch Renewal Commands ---
+
+# Test Gmail Watch renewal Cloud Function manually
+curl -X POST https://asia-southeast1-autoland-monitoring.cloudfunctions.net/renew-gmail-watch
+
+# View Cloud Function logs
+gcloud functions logs read renew-gmail-watch \
+  --region=asia-southeast1 \
+  --limit=50 \
+  --project=$PROJECT_ID
+
+# View Cloud Scheduler job status
+gcloud scheduler jobs describe renew-gmail-watch-weekly \
+  --location=asia-southeast1 \
+  --project=$PROJECT_ID
+
+# List all Cloud Scheduler jobs
+gcloud scheduler jobs list --project=$PROJECT_ID
+
+# View Cloud Scheduler execution logs
+gcloud scheduler jobs logs describe renew-gmail-watch-weekly \
+  --location=asia-southeast1 \
+  --project=$PROJECT_ID
+
+# Manually trigger Cloud Scheduler job (test)
+gcloud scheduler jobs run renew-gmail-watch-weekly \
+  --location=asia-southeast1 \
+  --project=$PROJECT_ID
+
+# Update refresh token in Secret Manager
+export NEW_REFRESH_TOKEN="1//0g..."
+echo -n "$NEW_REFRESH_TOKEN" | gcloud secrets versions add gmail-oauth-refresh-token \
+  --data-file=- \
+  --project=$PROJECT_ID
+
+# View current refresh token version
+gcloud secrets versions list gmail-oauth-refresh-token --project=$PROJECT_ID
 ```
 
 ---
@@ -1098,15 +1227,17 @@ FROM autoland_reports;
 ## 📚 Tài liệu liên quan
 
 - [DEVELOPMENT.md](./DEVELOPMENT.md) - Hướng dẫn setup môi trường development local
+- [Gmail Watch Renewal Automation](#setup-gmail-watch-renewal-automation) - Hướng dẫn setup automatic renewal cho Gmail Watch
 - [Hybrid PDF Parser System](#-hybrid-pdf-parser-system) - Chi tiết về hệ thống tối ưu chi phí
 
 ---
 
-**Maintained by:** Vietjet AMO ICT Department  
-**Contact:** moc@vietjetair.com  
-**Last Updated:** 2025-01-02
+**Maintained by:** Vietjet AMO ICT Department
+**Contact:** moc@vietjetair.com
+**Last Updated:** 2025-01-08
 
 **Changelog:**
+- **2025-01-08:** Added Gmail Watch Renewal Automation - Cloud Function + Cloud Scheduler for automatic renewal every 6 days
 - **2025-01-02:** Tách phần development sang DEVELOPMENT.md, tập trung vào production deployment với Secret Manager và OAuth2
 - **2025-12-30:** Added Hybrid PDF Parser System (pdf2json + Document AI fallback) - Cost optimization feature
 - **2025-12-28:** Initial deployment guide
