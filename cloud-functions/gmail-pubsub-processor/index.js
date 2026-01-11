@@ -6,15 +6,17 @@
  * 
  * Environment Variables Required:
  * - GCP_PROJECT_ID: Google Cloud Project ID
- * - GCP_KEY_FILE: Path to service account key file (or use default credentials)
- * - GMAIL_USER: Email address to monitor (for domain-wide delegation)
  * - GCP_STORAGE_BUCKET: Cloud Storage bucket name
  * - DOCUMENT_AI_PROCESSOR_ID: Document AI processor ID
- * - DATABASE_URL: PostgreSQL connection string
- * - API_BASE_URL: (Optional) Base URL for API endpoint (if calling HTTP API instead)
+ * - DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD: Database connection
+ * - API_BASE_URL: Base URL for API endpoint (Cloud Run URL)
+ * 
+ * Secrets (via Secret Manager):
+ * - GOOGLE_CLIENT_ID: OAuth2 Client ID
+ * - GOOGLE_CLIENT_SECRET: OAuth2 Client Secret  
+ * - OAUTH_REFRESH_TOKEN: Gmail OAuth2 refresh token
  */
 
-const { PubSub } = require('@google-cloud/pubsub');
 const { google } = require('googleapis');
 const { Storage } = require('@google-cloud/storage');
 const { DocumentProcessorServiceClient } = require('@google-cloud/documentai');
@@ -32,7 +34,7 @@ exports.processGmailNotification = async (cloudEvent) => {
   
   try {
     // Extract Pub/Sub message from CloudEvent
-    const pubsubMessage = cloudEvent.data.message;
+    const pubsubMessage = cloudEvent.data?.message;
     if (!pubsubMessage || !pubsubMessage.data) {
       console.error('Invalid Pub/Sub message format');
       return;
@@ -53,7 +55,7 @@ exports.processGmailNotification = async (cloudEvent) => {
       return;
     }
     
-    // Initialize Gmail API
+    // Initialize Gmail API with OAuth2
     const gmail = await getGmailService();
     
     // Get history to find new messages
@@ -94,45 +96,37 @@ exports.processGmailNotification = async (cloudEvent) => {
 };
 
 /**
- * Get Gmail API service instance
+ * Get Gmail API service instance using OAuth2 tokens
+ * Uses refresh token from Secret Manager to get fresh access token
  */
 async function getGmailService() {
-  const projectId = process.env.GCP_PROJECT_ID;
-  const keyFile = process.env.GCP_KEY_FILE;
-  const gmailUser = process.env.GMAIL_USER;
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.OAUTH_REFRESH_TOKEN;
   
-  let auth;
-  
-  if (keyFile && projectId) {
-    // Use Service Account with domain-wide delegation
-    auth = new google.auth.GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
-      keyFile: keyFile,
-      projectId: projectId,
-    });
-    
-    if (gmailUser) {
-      // Domain-wide delegation: impersonate user
-      const authClient = await auth.getClient();
-      authClient.subject = gmailUser;
-      return google.gmail({ version: 'v1', auth: authClient });
-    } else {
-      return google.gmail({ version: 'v1', auth });
-    }
-  } else {
-    // Use default credentials (Cloud Function default service account)
-    auth = new google.auth.GoogleAuth({
-      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
-    });
-    
-    if (gmailUser) {
-      const authClient = await auth.getClient();
-      authClient.subject = gmailUser;
-      return google.gmail({ version: 'v1', auth: authClient });
-    } else {
-      return google.gmail({ version: 'v1', auth });
-    }
+  if (!clientId || !clientSecret) {
+    throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required');
   }
+  
+  if (!refreshToken) {
+    throw new Error('OAUTH_REFRESH_TOKEN is required. Please run setup-gmail-watch.js and store the refresh token in Secret Manager.');
+  }
+  
+  // Create OAuth2 client
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
+  
+  // Set refresh token
+  oauth2Client.setCredentials({
+    refresh_token: refreshToken
+  });
+  
+  // Refresh access token
+  console.log('Refreshing access token...');
+  const { credentials } = await oauth2Client.refreshAccessToken();
+  oauth2Client.setCredentials(credentials);
+  console.log('Access token refreshed successfully');
+  
+  return google.gmail({ version: 'v1', auth: oauth2Client });
 }
 
 /**
@@ -152,13 +146,13 @@ async function processMessage(gmail, messageId) {
     const payload = message.data.payload;
     const headers = payload.headers || [];
     
-    const subject = headers.find(h => h.name === 'Subject')?.value || '';
-    const from = headers.find(h => h.name === 'From')?.value || '';
+    const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || '';
+    const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || '';
     
     console.log(`Message subject: ${subject}`);
     console.log(`Message from: ${from}`);
     
-    // Check if subject contains "Autoland" (optional filter)
+    // Check if subject contains "Autoland" (case-insensitive filter)
     if (subject && !subject.toLowerCase().includes('autoland')) {
       console.log('Skipping message - subject does not contain "Autoland"');
       return;
@@ -176,7 +170,7 @@ async function processMessage(gmail, messageId) {
     
     // Process each PDF attachment
     for (const attachment of pdfAttachments) {
-      await processPdfAttachment(gmail, messageId, attachment.attachmentId, subject);
+      await processPdfAttachment(gmail, messageId, attachment, subject, from);
     }
     
   } catch (error) {
@@ -231,33 +225,33 @@ function findPdfAttachments(payload) {
 /**
  * Process a PDF attachment
  */
-async function processPdfAttachment(gmail, messageId, attachmentId, emailSubject) {
+async function processPdfAttachment(gmail, messageId, attachment, emailSubject, emailFrom) {
   try {
-    console.log(`Processing PDF attachment: ${attachmentId}`);
+    console.log(`Processing PDF attachment: ${attachment.filename}`);
     
     // Download PDF attachment
-    const attachment = await gmail.users.messages.attachments.get({
+    const attachmentData = await gmail.users.messages.attachments.get({
       userId: 'me',
       messageId: messageId,
-      id: attachmentId,
+      id: attachment.attachmentId,
     });
     
-    const pdfData = Buffer.from(attachment.data.data, 'base64');
+    const pdfData = Buffer.from(attachmentData.data.data, 'base64');
     console.log(`PDF downloaded: ${pdfData.length} bytes`);
     
     // Check if we should call API endpoint or process directly
     const apiBaseUrl = process.env.API_BASE_URL;
     
     if (apiBaseUrl) {
-      // Call HTTP API endpoint
-      await callApiEndpoint(apiBaseUrl, messageId, attachmentId);
+      // Preferred: Call HTTP API endpoint for processing
+      await callApiEndpoint(apiBaseUrl, pdfData, attachment.filename, emailSubject, emailFrom, messageId);
     } else {
-      // Process directly
-      await processPdfDirectly(pdfData, emailSubject, messageId, attachmentId);
+      // Fallback: Process directly in Cloud Function
+      await processPdfDirectly(pdfData, attachment.filename, emailSubject, emailFrom, messageId);
     }
     
   } catch (error) {
-    console.error(`Error processing PDF attachment ${attachmentId}:`, error);
+    console.error(`Error processing PDF attachment ${attachment.filename}:`, error);
     throw error;
   }
 }
@@ -265,41 +259,41 @@ async function processPdfAttachment(gmail, messageId, attachmentId, emailSubject
 /**
  * Call HTTP API endpoint to process PDF
  */
-async function callApiEndpoint(apiBaseUrl, messageId, attachmentId) {
+async function callApiEndpoint(apiBaseUrl, pdfData, filename, emailSubject, emailFrom, messageId) {
   try {
     // Use internal endpoint that doesn't require OAuth2
     const url = `${apiBaseUrl}/api/reports/process-internal`;
     
-    // Optional: Add authentication header if needed
-    // For Cloud Functions calling Cloud Run, you can use Identity Token
     let headers = {
       'Content-Type': 'application/json',
     };
     
-    // If API requires authentication, get identity token
-    // This works when Cloud Function and Cloud Run are in same project
+    // Get identity token for Cloud Run authentication
     try {
       const auth = new google.auth.GoogleAuth({
         scopes: ['https://www.googleapis.com/auth/cloud-platform'],
       });
-      const client = await auth.getClient();
-      const idToken = await client.getIdTokenClient(apiBaseUrl);
-      const token = await idToken.idTokenProvider.fetchIdToken(apiBaseUrl);
+      const client = await auth.getIdTokenClient(apiBaseUrl);
+      const token = await client.idTokenProvider.fetchIdToken(apiBaseUrl);
       headers['Authorization'] = `Bearer ${token}`;
     } catch (authError) {
       console.warn('Could not get identity token, proceeding without auth:', authError.message);
-      // If internal endpoint doesn't require auth, continue without token
     }
     
     const response = await axios.post(
       url,
       {
+        pdfBase64: pdfData.toString('base64'),
+        filename: filename,
+        emailSubject: emailSubject,
+        emailFrom: emailFrom,
         messageId: messageId,
-        attachmentId: attachmentId,
       },
       {
         headers: headers,
         timeout: 300000, // 5 minutes timeout
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
       }
     );
     
@@ -317,52 +311,52 @@ async function callApiEndpoint(apiBaseUrl, messageId, attachmentId) {
 
 /**
  * Process PDF directly (without calling API endpoint)
+ * This is a fallback method if API_BASE_URL is not configured
  */
-async function processPdfDirectly(pdfData, emailSubject, messageId, attachmentId) {
+async function processPdfDirectly(pdfData, filename, emailSubject, emailFrom, messageId) {
   try {
-    // Upload to Cloud Storage
-    const storage = new Storage({
-      projectId: process.env.GCP_PROJECT_ID,
-      keyFilename: process.env.GCP_KEY_FILE,
-    });
-    
     const bucketName = process.env.GCP_STORAGE_BUCKET;
     if (!bucketName) {
       throw new Error('GCP_STORAGE_BUCKET environment variable is required');
     }
     
-    // Extract filename from email subject or use timestamp
-    const pdfFilename = emailSubject.match(/([A-Z0-9_-]+\.pdf)/i)?.[1] || 
-                       `autoland-${Date.now()}.pdf`;
+    // Upload to Cloud Storage
+    const storage = new Storage({
+      projectId: process.env.GCP_PROJECT_ID,
+    });
     
     // Organize by date: YYYY/MM/DD/filename.pdf
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, '0');
     const day = String(now.getDate()).padStart(2, '0');
-    const fileName = `${year}/${month}/${day}/${pdfFilename}`;
+    const storagePath = `${year}/${month}/${day}/${filename}`;
     
     const bucket = storage.bucket(bucketName);
-    const file = bucket.file(fileName);
+    const file = bucket.file(storagePath);
     
     await file.save(pdfData, {
       metadata: {
         contentType: 'application/pdf',
+        metadata: {
+          emailSubject: emailSubject,
+          emailFrom: emailFrom,
+          messageId: messageId,
+        }
       },
     });
     
-    console.log(`PDF uploaded to: gs://${bucketName}/${fileName}`);
+    console.log(`PDF uploaded to: gs://${bucketName}/${storagePath}`);
     
     // Extract text using Document AI
-    const documentAI = new DocumentProcessorServiceClient({
-      keyFilename: process.env.GCP_KEY_FILE,
-      projectId: process.env.GCP_PROJECT_ID,
-    });
-    
     const processorName = process.env.DOCUMENT_AI_PROCESSOR_ID;
     if (!processorName) {
       throw new Error('DOCUMENT_AI_PROCESSOR_ID environment variable is required');
     }
+    
+    const documentAI = new DocumentProcessorServiceClient({
+      projectId: process.env.GCP_PROJECT_ID,
+    });
     
     const [result] = await documentAI.processDocument({
       name: processorName,
@@ -372,15 +366,12 @@ async function processPdfDirectly(pdfData, emailSubject, messageId, attachmentId
       },
     });
     
-    const extractedText = result.document.text;
+    const extractedText = result.document?.text || '';
     console.log(`Extracted text length: ${extractedText.length} characters`);
     
-    // Parse PDF data (you'll need to import the parser)
-    // For now, we'll save to database directly
-    // In production, you should import the parser from your codebase
-    
-    // Save to database
-    await saveToDatabase(extractedText, fileName, bucketName, pdfFilename, messageId);
+    // Save to database (basic implementation)
+    // For production, you should use the API endpoint which has proper parsing logic
+    await saveToDatabase(extractedText, storagePath, bucketName, filename, emailSubject, emailFrom, messageId);
     
     console.log('Successfully processed PDF and saved to database');
     
@@ -392,32 +383,36 @@ async function processPdfDirectly(pdfData, emailSubject, messageId, attachmentId
 
 /**
  * Save parsed data to database
- * Note: This is a simplified version. In production, you should use your actual parser.
+ * Note: This is a basic implementation. Use API endpoint for full parsing.
  */
-async function saveToDatabase(extractedText, storagePath, bucketName, filename, messageId) {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error('DATABASE_URL environment variable is required');
+async function saveToDatabase(extractedText, storagePath, bucketName, filename, emailSubject, emailFrom, messageId) {
+  const dbConfig = {
+    host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT || '5432'),
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+  };
+  
+  // Check required config
+  if (!dbConfig.host || !dbConfig.database || !dbConfig.user || !dbConfig.password) {
+    console.warn('Database configuration incomplete. Skipping database save.');
+    console.log('Extracted text preview:', extractedText.substring(0, 500));
+    return;
   }
   
-  const pool = new Pool({
-    connectionString: databaseUrl,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  });
+  const pool = new Pool(dbConfig);
   
   try {
-    // TODO: Parse extractedText using your parser
-    // For now, we'll just log it
+    // Log that we received the PDF (parsing should be done via API endpoint)
+    console.log('PDF received and stored. Use API endpoint for full parsing.');
+    console.log('Storage path:', storagePath);
     console.log('Extracted text preview:', extractedText.substring(0, 200));
     
-    // Example: Insert into database (you'll need to implement the actual parser)
-    // const parsedData = parseAutolandReport(extractedText);
-    // await pool.query('INSERT INTO autoland_reports (...) VALUES (...)');
-    
-    console.log('Database save not implemented - use API endpoint or implement parser');
+    // You can add basic insert here if needed, but prefer using API endpoint
+    // for proper parsing with the hybrid parser system
     
   } finally {
     await pool.end();
   }
 }
-

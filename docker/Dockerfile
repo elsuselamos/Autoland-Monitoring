@@ -4,10 +4,10 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Copy package files
-COPY package.json .
+COPY package.json package-lock.json* ./
 
-# Stage 1: Install dependencies
-RUN npm install
+# Install dependencies
+RUN npm ci --only=production=false
 
 # Stage 2: Builder
 FROM node:18-alpine AS builder
@@ -20,12 +20,17 @@ COPY --from=deps /app/package.json ./package.json
 # Copy source code
 COPY . .
 
+# Build the application
+ENV NEXT_TELEMETRY_DISABLED 1
+RUN npm run build
+
 # Stage 3: Runner
 FROM node:18-alpine AS runner
 WORKDIR /app
 
 # Set production environment
 ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
 
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs
@@ -34,8 +39,15 @@ RUN adduser --system --uid 1001 nextjs
 # Copy public files
 COPY --from=builder /app/public ./public
 
+# Set the correct permission for prerender cache
+RUN mkdir .next
+RUN chown nextjs:nodejs .next
+
 # Copy build artifacts from builder
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./app
+# Automatically leverage output traces to reduce image size
+# https://nextjs.org/docs/advanced-features/output-file-tracing
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 # Switch to non-root user
 USER nextjs

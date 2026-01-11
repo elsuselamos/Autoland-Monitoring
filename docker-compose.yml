@@ -14,8 +14,9 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Note: Files in /docker-entrypoint-initdb.d are executed alphabetically
+      # Migrations are already in the correct order (001_, 002_, etc.)
       - ./database/migrations:/docker-entrypoint-initdb.d
-      - ./database/seed_data.sql:/docker-entrypoint-initdb.d/seed_data.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U autoland"]
       interval: 10s

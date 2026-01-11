@@ -1,15 +1,44 @@
+# Cloud Build Configuration for Autoland Monitoring
+# Uses Artifact Registry (recommended over Container Registry/gcr.io)
+
+substitutions:
+  _REGION: asia-southeast1
+  _REPO_NAME: autoland-monitoring
+  _SERVICE_NAME: autoland-monitoring
+
 steps:
-  # Build Docker image
+  # Build Docker image with multiple tags
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-f', 'docker/Dockerfile', '-t', 'gcr.io/$PROJECT_ID/autoland-monitoring:$SHORT_SHA', '-t', 'gcr.io/$PROJECT_ID/autoland-monitoring:latest', '.']
+    args:
+      - 'build'
+      - '-f'
+      - 'docker/Dockerfile'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:$SHORT_SHA'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:latest'
+      - '.'
 
-  # Push to Artifact Registry
+  # Push image with commit SHA tag
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'gcr.io/$PROJECT_ID/autoland-monitoring:$SHORT_SHA']
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:$SHORT_SHA'
 
-# Images
+  # Push image with latest tag
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:latest'
+
+# Images to push to Artifact Registry
 images:
-  - 'gcr.io/$PROJECT_ID/autoland-monitoring:$SHORT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:$SHORT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_SERVICE_NAME}:latest'
 
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Timeout for the entire build (20 minutes)
 timeout: '1200s'
-

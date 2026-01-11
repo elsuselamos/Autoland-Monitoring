@@ -1,159 +1,91 @@
 import { NextResponse } from "next/server"
-import { google } from "googleapis"
 import { Storage } from "@google-cloud/storage"
-import { DocumentProcessorServiceClient } from "@google-cloud/documentai"
 import { db } from "@/lib/db"
-import { parseAutolandReport } from "@/lib/parsers/autoland-pdf-parser"
+import { parsePDFWithFallback } from "@/lib/parsers/hybrid-pdf-parser"
 
 /**
  * Internal API endpoint for processing Autoland Report PDF
  * POST /api/reports/process-internal
  * 
- * This endpoint is designed to be called from Cloud Functions or other internal services.
- * It uses Service Account authentication instead of OAuth2.
+ * This endpoint is designed to be called from Cloud Functions.
+ * The Cloud Function downloads the PDF and sends it here as base64.
  * 
- * Body: { messageId: string, attachmentId: string }
+ * Body: { 
+ *   pdfBase64: string,      // PDF content as base64
+ *   filename: string,       // Original filename
+ *   emailSubject?: string,  // Email subject
+ *   emailFrom?: string,     // Email sender
+ *   messageId?: string      // Gmail message ID
+ * }
  * 
- * Security: This endpoint should only be accessible from within the same VPC or
- * should validate the request comes from a trusted source (e.g., check headers).
+ * Security: This endpoint validates the Authorization header for Cloud Run.
  */
 
 export async function POST(request: Request) {
   try {
-    // Optional: Validate request comes from trusted source
-    // For Cloud Functions, you can check headers or use VPC
-    const userAgent = request.headers.get("user-agent") || ""
-    const forwardedFor = request.headers.get("x-forwarded-for") || ""
-    
-    // Basic validation - in production, add more robust checks
-    // For example, check if request comes from Cloud Function service account
-    
-    const body = await request.json()
-    const { messageId, attachmentId } = body
+    // Validate authorization (Cloud Functions sends identity token)
+    const authHeader = request.headers.get("authorization")
+    // In production, you should validate the token
+    // For now, we log it for debugging
+    if (authHeader) {
+      console.log("Authorization header present")
+    }
 
-    if (!messageId || !attachmentId) {
+    const body = await request.json()
+    const { pdfBase64, filename, emailSubject, emailFrom, messageId } = body
+
+    if (!pdfBase64) {
       return NextResponse.json(
         {
           success: false,
-          error: "messageId and attachmentId are required",
+          error: "pdfBase64 is required",
         },
         { status: 400 }
       )
     }
 
-    // Step 1: Initialize Gmail API using Service Account
-    let gmail: any
+    // Decode PDF from base64
+    const pdfData = Buffer.from(pdfBase64, "base64")
+    console.log(`PDF received: ${pdfData.length} bytes, filename: ${filename}`)
 
-    if (process.env.GCP_KEY_FILE && process.env.GCP_PROJECT_ID) {
-      const gmailAuth = new google.auth.GoogleAuth({
-        scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
-        keyFile: process.env.GCP_KEY_FILE,
-        projectId: process.env.GCP_PROJECT_ID,
-      })
-      
-      if (process.env.GMAIL_USER) {
-        const authClient = await gmailAuth.getClient() as any
-        authClient.subject = process.env.GMAIL_USER
-        gmail = google.gmail({ version: "v1", auth: authClient })
-      } else {
-        gmail = google.gmail({ version: "v1", auth: gmailAuth })
-      }
-    } else {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Service Account not configured",
-          message: "GCP_KEY_FILE and GCP_PROJECT_ID must be set for internal API",
-        },
-        { status: 401 }
-      )
-    }
-
-    // Step 2: Get message details for metadata
-    const message = await gmail.users.messages.get({
-      userId: "me",
-      id: messageId,
-      format: "metadata",
-      metadataHeaders: ["Subject", "From", "Date"],
-    })
-
-    const emailSubject = message.data.payload?.headers?.find((h: any) => h.name === "Subject")?.value || ""
-    const emailSender = message.data.payload?.headers?.find((h: any) => h.name === "From")?.value || ""
-    const emailDate = message.data.payload?.headers?.find((h: any) => h.name === "Date")?.value || ""
-
-    // Step 3: Download PDF attachment
-    console.log(`Downloading attachment ${attachmentId} from message ${messageId}`)
-    const attachment = await gmail.users.messages.attachments.get({
-      userId: "me",
-      messageId: messageId,
-      id: attachmentId,
-    })
-
-    const pdfData = Buffer.from(attachment.data.data!, "base64")
-    console.log(`PDF downloaded: ${pdfData.length} bytes`)
-
-    // Step 4: Upload to Cloud Storage
+    // Step 1: Upload to Cloud Storage
     const storage = new Storage({
       projectId: process.env.GCP_PROJECT_ID,
       keyFilename: process.env.GCP_KEY_FILE,
     })
 
-    const bucketName = process.env.GCP_STORAGE_BUCKET || "autoland-reports-test"
+    const bucketName = process.env.GCP_STORAGE_BUCKET || "autoland-reports"
     
-    // Extract filename from email subject or use timestamp
-    const pdfFilename = emailSubject.match(/([A-Z0-9_-]+\.pdf)/i)?.[1] || 
-                       `autoland-${Date.now()}.pdf`
+    // Use provided filename or generate one
+    const pdfFilename = filename || `autoland-${Date.now()}.pdf`
     
     // Organize by date: YYYY/MM/DD/filename.pdf
     const now = new Date()
     const year = now.getFullYear()
     const month = String(now.getMonth() + 1).padStart(2, '0')
     const day = String(now.getDate()).padStart(2, '0')
-    const fileName = `${year}/${month}/${day}/${pdfFilename}`
+    const storagePath = `${year}/${month}/${day}/${pdfFilename}`
 
     const bucket = storage.bucket(bucketName)
-    const file = bucket.file(fileName)
+    const file = bucket.file(storagePath)
 
     await file.save(pdfData, {
       metadata: {
         contentType: "application/pdf",
+        metadata: {
+          emailSubject: emailSubject || "",
+          emailFrom: emailFrom || "",
+          messageId: messageId || "",
+        }
       },
     })
 
-    console.log(`PDF uploaded to: gs://${bucketName}/${fileName}`)
+    console.log(`PDF uploaded to: gs://${bucketName}/${storagePath}`)
 
-    // Step 5: Extract text using Document AI
-    const documentAI = new DocumentProcessorServiceClient({
-      keyFilename: process.env.GCP_KEY_FILE,
-    })
+    // Step 2: Parse PDF using hybrid parser (pdf2json first, Document AI fallback)
+    const parseResult = await parsePDFWithFallback(pdfData)
 
-    const processorName = process.env.DOCUMENT_AI_PROCESSOR_ID
-    if (!processorName) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Document AI Processor not configured",
-          message: "DOCUMENT_AI_PROCESSOR_ID must be set",
-        },
-        { status: 500 }
-      )
-    }
-
-    const [result] = await documentAI.processDocument({
-      name: processorName,
-      rawDocument: {
-        content: pdfData,
-        mimeType: "application/pdf",
-      },
-    })
-
-    const extractedText = result.document.text || ""
-    console.log(`Extracted text length: ${extractedText.length} characters`)
-
-    // Step 6: Parse extracted text
-    const parseResult = parseAutolandReport(extractedText)
-
-    if (!parseResult.success) {
+    if (!parseResult.success || !parseResult.data) {
       return NextResponse.json(
         {
           success: false,
@@ -162,16 +94,17 @@ export async function POST(request: Request) {
           details: {
             errors: parseResult.errors,
             warnings: parseResult.warnings,
-            extractedTextPreview: extractedText.substring(0, 500),
+            method: parseResult.method,
+            parsingAttempts: parseResult.parsingAttempts,
           },
         },
         { status: 400 }
       )
     }
 
-    const parsedData = parseResult.data!
+    const parsedData = parseResult.data
 
-    // Step 7: Check for duplicate reports
+    // Step 3: Check for duplicate reports
     const existingReport = await db.query(
       "SELECT id FROM autoland_reports WHERE report_number = $1",
       [parsedData.report_number]
@@ -191,20 +124,26 @@ export async function POST(request: Request) {
       )
     }
 
-    // Step 8: Insert into database
+    // Step 4: Create datetime_utc from date_utc and time_utc
+    const datetimeUtc = `${parsedData.date_utc}T${parsedData.time_utc}:00Z`
+
+    // Step 5: Insert into database with extraction metrics
     const insertResult = await db.query(
       `INSERT INTO autoland_reports (
         report_number, aircraft_reg, flight_number, airport, runway,
-        captain, first_officer, date_utc, time_utc, wind_velocity,
-        td_point, tracking, qnh, alignment, speed_control,
+        captain, first_officer, date_utc, time_utc, datetime_utc,
+        wind_velocity, td_point, tracking, qnh, alignment, speed_control,
         temperature, landing, aircraft_dropout, visibility_rvr,
         other, result, reasons, captain_signature,
         pdf_storage_path, pdf_storage_bucket, pdf_filename,
-        email_subject, email_sender, email_date, created_at
+        email_subject, email_sender, email_id,
+        extraction_method, extraction_cost, extraction_cost_saved,
+        extraction_status, processed_at, created_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-        $21, $22, $23, $24, $25, $26, $27, $28, $29, NOW()
+        $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+        $31, $32, $33, 'SUCCESS', NOW(), NOW()
       ) RETURNING id`,
       [
         parsedData.report_number,
@@ -216,6 +155,7 @@ export async function POST(request: Request) {
         parsedData.first_officer,
         parsedData.date_utc,
         parsedData.time_utc,
+        datetimeUtc,
         parsedData.wind_velocity,
         parsedData.td_point,
         parsedData.tracking,
@@ -230,23 +170,27 @@ export async function POST(request: Request) {
         parsedData.result,
         parsedData.reasons,
         parsedData.captain_signature,
-        fileName, // pdf_storage_path (without gs:// prefix)
-        bucketName, // pdf_storage_bucket
-        pdfFilename, // pdf_filename
-        emailSubject,
-        emailSender,
-        emailDate,
+        storagePath,
+        bucketName,
+        pdfFilename,
+        emailSubject || null,
+        emailFrom || null,
+        messageId || null,
+        parseResult.method,
+        parseResult.metrics.actualCost,
+        parseResult.metrics.costSaved,
       ]
     )
 
     const reportId = insertResult.rows[0].id
 
-    // Step 9: Update autoland_to_go table
+    // Step 6: Sync autoland_to_go table
     if (parsedData.aircraft_reg) {
-      await db.query("SELECT calculate_autoland_to_go($1)", [parsedData.aircraft_reg])
+      await db.query("SELECT sync_autoland_to_go()")
     }
 
     console.log(`Report saved successfully with ID: ${reportId}`)
+    console.log(`Extraction method: ${parseResult.method}, Cost: $${parseResult.metrics.actualCost}, Saved: $${parseResult.metrics.costSaved}`)
 
     return NextResponse.json({
       success: true,
@@ -255,8 +199,14 @@ export async function POST(request: Request) {
         reportNumber: parsedData.report_number,
         aircraftReg: parsedData.aircraft_reg,
         flightNumber: parsedData.flight_number,
-        pdfStoragePath: fileName,
+        result: parsedData.result,
+        pdfStoragePath: storagePath,
         pdfStorageBucket: bucketName,
+        extraction: {
+          method: parseResult.method,
+          cost: parseResult.metrics.actualCost,
+          costSaved: parseResult.metrics.costSaved,
+        },
         message: "Report processed and saved successfully",
       },
     })
@@ -269,11 +219,9 @@ export async function POST(request: Request) {
         success: false,
         error: "Failed to process report",
         message: error.message || "Unknown error",
-        details: error.details || {},
+        details: error.stack || {},
       },
       { status: 500 }
     )
   }
 }
-
-

@@ -513,8 +513,11 @@ gcloud functions deploy $FUNCTION_NAME \
   --set-env-vars="DB_PORT=5432" \
   --set-env-vars="DB_NAME=autoland" \
   --set-env-vars="DB_USER=autoland" \
+  --set-env-vars="GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
+  --set-env-vars="API_BASE_URL=https://autoland.amoict.com" \
   --set-secrets="DB_PASSWORD=autoland-db-password:latest" \
-  --set-secrets="GCP_KEY_FILE=gcp-service-account-key:latest" \
+  --set-secrets="GOOGLE_CLIENT_SECRET=google-client-secret:latest" \
+  --set-secrets="OAUTH_REFRESH_TOKEN=gmail-oauth-refresh-token:latest" \
   --memory=2GB \
   --timeout=540s \
   --max-instances=1 \

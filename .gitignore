@@ -53,6 +53,9 @@ personal-docs/
 *.pem
 *.key
 credentials.json
+gcp-key.json
+*-key.json
+service-account*.json
 
 # Database
 *.db
