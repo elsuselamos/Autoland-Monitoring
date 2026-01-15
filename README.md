@@ -210,6 +210,37 @@ gcloud config get-value project
 
 ### Enable APIs qua gcloud CLI:
 
+**Cách 1: Enable tất cả trong 1 lệnh (Khuyến nghị - tránh rate limit)**
+
+```bash
+export PROJECT_ID="autoland-vj"
+
+# Enable tất cả APIs cần thiết trong 1 lệnh
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  sql-component.googleapis.com \
+  sqladmin.googleapis.com \
+  storage.googleapis.com \
+  documentai.googleapis.com \
+  pubsub.googleapis.com \
+  cloudfunctions.googleapis.com \
+  eventarc.googleapis.com \
+  secretmanager.googleapis.com \
+  cloudscheduler.googleapis.com \
+  --project=$PROJECT_ID
+```
+
+**⚠️ Lưu ý:** Nếu chạy từng lệnh riêng lẻ quá nhanh, có thể gặp lỗi **Rate Limit (HTTP 429)**:
+```
+Quota exceeded for quota metric 'Mutate requests' and limit 'Mutate requests per minute'
+```
+Trong trường hợp này, đợi 1 phút rồi chạy lại, hoặc sử dụng Cách 1 ở trên.
+
+<details>
+<summary><strong>Cách 2: Enable từng API riêng lẻ (Click để xem)</strong></summary>
+
 ```bash
 export PROJECT_ID="autoland-vj"
 
@@ -232,17 +263,14 @@ gcloud services enable storage.googleapis.com --project=$PROJECT_ID
 # Enable Document AI API
 gcloud services enable documentai.googleapis.com --project=$PROJECT_ID
 
-# Enable Pub/Sub API (nếu dùng Pub/Sub)
+# Enable Pub/Sub API
 gcloud services enable pubsub.googleapis.com --project=$PROJECT_ID
 
-# Enable Cloud Functions API (nếu dùng Pub/Sub)
+# Enable Cloud Functions API
 gcloud services enable cloudfunctions.googleapis.com --project=$PROJECT_ID
 
 # Enable Eventarc API (BẮT BUỘC cho Cloud Functions Gen2)
 gcloud services enable eventarc.googleapis.com --project=$PROJECT_ID
-
-# Enable Cloud Run Admin API (Cloud Functions Gen2 chạy trên Cloud Run)
-gcloud services enable run.googleapis.com --project=$PROJECT_ID
 
 # Enable Secret Manager API
 gcloud services enable secretmanager.googleapis.com --project=$PROJECT_ID
@@ -250,6 +278,8 @@ gcloud services enable secretmanager.googleapis.com --project=$PROJECT_ID
 # Enable Cloud Scheduler API (để tự động renew Gmail Watch)
 gcloud services enable cloudscheduler.googleapis.com --project=$PROJECT_ID
 ```
+
+</details>
 
 ### Enable Gmail API qua Google Cloud Console
 
@@ -357,23 +387,26 @@ Document AI processors không thể tạo qua gcloud CLI. **Phải tạo qua Goo
 2. Chọn project `autoland-vj`
 3. Vào **Document AI** (tìm trong menu hoặc search "Document AI")
 4. Nếu lần đầu, click **GET STARTED** hoặc **CREATE PROCESSOR**
-5. **Processor Type:** Chọn **OCR Processor**
-6. **Location:** Chọn `asia-southeast1` (Singapore)
-7. **Display Name:** `Autoland PDF Processor`
+5. **Processor Type:** Chọn **Document OCR**
+6. **Processor name:** `autoland-pdf-processor`
+7. **Region:** Chọn **US (United States)**
+   
+   > ⚠️ **Lưu ý:** Document AI chỉ hỗ trợ 2 regions: `us` và `eu`. Khuyến nghị chọn **US** vì pricing tốt hơn.
+   
 8. Click **CREATE**
 
 ### Lấy Processor ID:
 
-1. Trong Document AI Console, vào **Processors**
-2. Click vào processor vừa tạo (`Autoland PDF Processor`)
-3. Trong trang **Details**, tìm **Processor ID** hoặc **Resource Name**
+1. Trong Document AI Console, vào **Processors** > **My processors**
+2. Click vào processor vừa tạo (`autoland-pdf-processor`)
+3. Trong trang **Details**, tìm **Processor ID** hoặc copy từ URL
 4. Format sẽ là:
    ```
-   projects/autoland-vj/locations/asia-southeast1/processors/abc123def456
+   projects/autoland-vj/locations/us/processors/abc123def456
    ```
-5. **Copy toàn bộ Processor ID này** để dùng trong Cloud Run deployment (Bước 13)
+5. **Copy toàn bộ Processor ID này** để dùng trong Cloud Run deployment (Bước 11)
 
-**Lưu ý:** Processor ID cần để cấu hình trong Cloud Run environment variables
+**Lưu ý:** Processor ID cần để cấu hình trong Cloud Run environment variables. Latency từ `asia-southeast1` (Cloud Run) đến `us` (Document AI) là chấp nhận được vì Document AI chỉ được dùng làm fallback (~15% cases).
 
 ---
 
@@ -566,7 +599,7 @@ gcloud run deploy autoland-vj \
   --set-secrets "DB_PASSWORD=autoland-db-password:latest" \
   --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID" \
   --set-env-vars "GCP_STORAGE_BUCKET=autoland-reports" \
-  --set-env-vars "DOCUMENT_AI_PROCESSOR_ID=projects/$PROJECT_ID/locations/asia-southeast1/processors/YOUR_PROCESSOR_ID" \
+  --set-env-vars "DOCUMENT_AI_PROCESSOR_ID=projects/$PROJECT_ID/locations/us/processors/YOUR_PROCESSOR_ID" \
   --set-env-vars "NEXT_PUBLIC_APP_URL=https://YOUR_DOMAIN" \
   --memory 1Gi \
   --cpu 1 \
@@ -841,7 +874,7 @@ gcloud functions deploy $FUNCTION_NAME \
   --service-account=$SA_EMAIL \
   --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID" \
   --set-env-vars="GCP_STORAGE_BUCKET=autoland-reports" \
-  --set-env-vars="DOCUMENT_AI_PROCESSOR_ID=projects/$PROJECT_ID/locations/asia-southeast1/processors/YOUR_PROCESSOR_ID" \
+  --set-env-vars="DOCUMENT_AI_PROCESSOR_ID=projects/$PROJECT_ID/locations/us/processors/YOUR_PROCESSOR_ID" \
   --set-env-vars="GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
   --set-env-vars="API_BASE_URL=https://YOUR_DOMAIN" \
   --set-secrets="GOOGLE_CLIENT_SECRET=google-client-secret:latest" \
@@ -1371,9 +1404,10 @@ gcloud secrets versions list gmail-oauth-refresh-token --project=$PROJECT_ID
 
 **Maintained by:** Vietjet AMO ICT Department
 **Contact:** moc@vietjetair.com
-**Last Updated:** 2025-01-08
+**Last Updated:** 2026-01-15
 
 **Changelog:**
+- **2026-01-15:** Cập nhật Bước 4 - Enable APIs trong 1 lệnh để tránh rate limit (HTTP 429)
 - **2025-01-08:** Added Gmail Watch Renewal Automation - Cloud Function + Cloud Scheduler for automatic renewal every 6 days
 - **2025-01-02:** Tách phần development sang DEVELOPMENT.md, tập trung vào production deployment với Secret Manager và OAuth2
 - **2025-12-30:** Added Hybrid PDF Parser System (pdf2json + Document AI fallback) - Cost optimization feature

@@ -153,7 +153,7 @@ GCP_KEY_FILE=./gcp-key.json
 GCP_STORAGE_BUCKET=autoland-reports
 
 # Document AI Configuration
-DOCUMENT_AI_PROCESSOR_ID=projects/autoland-monitoring/locations/asia-southeast1/processors/YOUR_PROCESSOR_ID
+DOCUMENT_AI_PROCESSOR_ID=projects/autoland-monitoring/locations/us/processors/YOUR_PROCESSOR_ID
 
 # OAuth2 Configuration (Gmail)
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
@@ -426,5 +426,5 @@ psql -h localhost -U autoland -d autoland -c "DROP SCHEMA public CASCADE; CREATE
 
 **Maintained by:** Vietjet AMO ICT Department  
 **Contact:** moc@vietjetair.com  
-**Last Updated:** 2025-01-02
+**Last Updated:** 2026-01-15
 
