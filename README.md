@@ -11,8 +11,47 @@ Hướng dẫn deploy hệ thống Autoland Monitoring lên Google Cloud Platfor
 
 ---
 
+## 🚀 PRODUCTION DEPLOYMENT - THỨ TỰ THỰC HIỆN
+
+**⚠️ QUAN TRỌNG:** Thực hiện theo đúng thứ tự để tránh lỗi `redirect_uri_mismatch`:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  PHẦN A: INFRASTRUCTURE (Bước 1-9)                              │
+│  ├── Google Cloud Account & CLI                                 │
+│  ├── Project & Enable APIs                                      │
+│  ├── Service Account & Document AI                              │
+│  ├── Cloud Storage & Cloud SQL                                  │
+│  └── Secret Manager (DB password ONLY)                          │
+├─────────────────────────────────────────────────────────────────┤
+│  PHẦN B: DEPLOY APPLICATION (Bước 10-13)                        │
+│  ├── Build Docker Image                                         │
+│  ├── Deploy to Cloud Run                                        │
+│  ├── ⭐ MAP CUSTOM DOMAIN (VD: autoland.yourdomain.com)         │
+│  └── Run Database Migrations                                    │
+├─────────────────────────────────────────────────────────────────┤
+│  PHẦN C: GMAIL INTEGRATION (Bước 14-17)                         │
+│  ├── Setup OAuth2 (redirect URI = custom domain đã map)         │
+│  ├── Setup Pub/Sub Topic                                        │
+│  ├── Setup Gmail Watch                                          │
+│  └── Deploy Cloud Functions                                     │
+├─────────────────────────────────────────────────────────────────┤
+│  PHẦN D: VERIFY & AUTOMATION (Bước 18-19)                       │
+│  ├── Verify Deployment                                          │
+│  └── Setup Gmail Watch Renewal Automation                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Tại sao phải deploy Cloud Run trước khi setup OAuth2?**
+- OAuth2 yêu cầu **redirect URI** chính xác (VD: `https://autoland.yourdomain.com/api/test/gmail/callback`)
+- Redirect URI phải là domain đã hoạt động
+- Nếu setup OAuth2 trước khi có domain → Phải quay lại update OAuth2 → Dễ gây lỗi
+
+---
+
 ## 📋 Mục Lục
 
+**Phần A: Setup Infrastructure**
 1. [Tổng quan](#tổng-quan)
 2. [Prerequisites](#prerequisites)
 3. [Bước 1: Tạo Google Cloud Account](#bước-1-tạo-google-cloud-account)
@@ -22,14 +61,23 @@ Hướng dẫn deploy hệ thống Autoland Monitoring lên Google Cloud Platfor
 7. [Bước 5: Tạo Service Account](#bước-5-tạo-service-account)
 8. [Bước 6: Tạo Document AI Processor](#bước-6-tạo-document-ai-processor)
 9. [Bước 7: Tạo Cloud Storage Bucket](#bước-7-tạo-cloud-storage-bucket)
-10. [Bước 8: Setup OAuth2 cho Gmail](#bước-8-setup-oauth2-cho-gmail)
-11. [Bước 9: Setup Database (Cloud SQL)](#bước-9-setup-database-cloud-sql)
-12. [Bước 10: Setup Pub/Sub và Cloud Functions](#bước-10-setup-pubsub-và-cloud-functions)
-13. [Bước 11: Cấu hình Secret Manager](#bước-11-cấu-hình-secret-manager)
-14. [Bước 12: Build Docker Image](#bước-12-build-docker-image)
-15. [Bước 13: Deploy to Cloud Run](#bước-13-deploy-to-cloud-run)
-16. [Bước 14: Run Database Migrations](#bước-14-run-database-migrations)
-17. [Bước 15: Verify Deployment](#bước-15-verify-deployment)
+10. [Bước 8: Setup Database (Cloud SQL)](#bước-8-setup-database-cloud-sql)
+11. [Bước 9: Cấu hình Secret Manager (Database)](#bước-9-cấu-hình-secret-manager-database)
+
+**Phần B: Deploy Application**
+12. [Bước 10: Build Docker Image](#bước-10-build-docker-image)
+13. [Bước 11: Deploy to Cloud Run](#bước-11-deploy-to-cloud-run)
+14. [Bước 12: Map Custom Domain](#bước-12-map-custom-domain)
+15. [Bước 13: Run Database Migrations](#bước-13-run-database-migrations)
+
+**Phần C: Setup Gmail Integration** *(Thực hiện SAU KHI có custom domain)*
+16. [Bước 14: Setup OAuth2 cho Gmail](#bước-14-setup-oauth2-cho-gmail)
+17. [Bước 15: Setup Pub/Sub và Gmail Watch](#bước-15-setup-pubsub-và-gmail-watch)
+18. [Bước 16: Deploy Cloud Functions](#bước-16-deploy-cloud-functions)
+
+**Phần D: Verify & Automation**
+19. [Bước 17: Verify Deployment](#bước-17-verify-deployment)
+20. [Bước 18: Setup Gmail Watch Renewal Automation](#bước-18-setup-gmail-watch-renewal-automation)
 
 ---
 
@@ -190,6 +238,12 @@ gcloud services enable pubsub.googleapis.com --project=$PROJECT_ID
 # Enable Cloud Functions API (nếu dùng Pub/Sub)
 gcloud services enable cloudfunctions.googleapis.com --project=$PROJECT_ID
 
+# Enable Eventarc API (BẮT BUỘC cho Cloud Functions Gen2)
+gcloud services enable eventarc.googleapis.com --project=$PROJECT_ID
+
+# Enable Cloud Run Admin API (Cloud Functions Gen2 chạy trên Cloud Run)
+gcloud services enable run.googleapis.com --project=$PROJECT_ID
+
 # Enable Secret Manager API
 gcloud services enable secretmanager.googleapis.com --project=$PROJECT_ID
 
@@ -213,7 +267,7 @@ Gmail API thường không thể enable qua CLI do permission issues. **Phải e
 ### Verify APIs đã được enable:
 
 ```bash
-gcloud services list --enabled --project=$PROJECT_ID | grep -E "(gmail|storage|documentai|run|cloudbuild|sql|pubsub|functions|secretmanager|scheduler)"
+gcloud services list --enabled --project=$PROJECT_ID | grep -E "(gmail|storage|documentai|run|cloudbuild|sql|pubsub|functions|secretmanager|scheduler|eventarc)"
 ```
 
 Hoặc kiểm tra trong Console:
@@ -226,8 +280,9 @@ Hoặc kiểm tra trong Console:
   - ✅ Cloud Build API
   - ✅ Cloud SQL Admin API (sqladmin.googleapis.com)
   - ✅ Cloud SQL Component API (sql-component.googleapis.com)
-  - ✅ Pub/Sub API (nếu dùng)
-  - ✅ Cloud Functions API (nếu dùng)
+  - ✅ Pub/Sub API
+  - ✅ Cloud Functions API
+  - ✅ **Eventarc API** (BẮT BUỘC cho Cloud Functions Gen2)
   - ✅ Secret Manager API
   - ✅ Cloud Scheduler API (để tự động renew Gmail Watch)
 
@@ -332,65 +387,11 @@ gsutil mb -p $PROJECT_ID -c STANDARD -l asia-southeast1 gs://$BUCKET_NAME
 gsutil ls gs://$BUCKET_NAME
 ```
 
-**Lưu ý:** Ghi nhớ `BUCKET_NAME` để dùng trong Cloud Run deployment (Bước 13)
+**Lưu ý:** Ghi nhớ `BUCKET_NAME` để dùng trong Cloud Run deployment
 
 ---
 
-## Bước 8: Setup OAuth2 cho Gmail
-
-**⚠️ QUAN TRỌNG:** Gmail API không sử dụng IAM roles. Để đọc Gmail personal account, bạn **PHẢI** dùng OAuth2.
-
-### Bước 8.1: Tạo OAuth Consent Screen
-
-1. Vào [Google Cloud Console](https://console.cloud.google.com/)
-2. Chọn project `autoland-monitoring`
-3. Vào **APIs & Services** > **OAuth consent screen**
-4. **User Type:** Chọn **External** (cho personal Gmail)
-5. Click **CREATE**
-6. **App information:**
-   - **App name:** `Autoland Monitoring`
-   - **User support email:** `moc@vietjetair.com` (hoặc email của bạn)
-   - **Developer contact:** `moc@vietjetair.com` (hoặc email của bạn)
-7. Click **SAVE AND CONTINUE**
-8. **Scopes:** Click **ADD OR REMOVE SCOPES**
-   - Tìm và chọn: `https://www.googleapis.com/auth/gmail.readonly`
-   - Click **UPDATE** > **SAVE AND CONTINUE**
-9. **Test users:** Click **ADD USERS**
-   - Thêm email Gmail của bạn (ví dụ: `your-email@gmail.com`)
-   - Click **ADD** > **SAVE AND CONTINUE**
-10. **Summary:** Review và click **BACK TO DASHBOARD**
-
-### Bước 8.2: Tạo OAuth Client ID
-
-1. Vào **APIs & Services** > **Credentials**
-2. Click **+ CREATE CREDENTIALS** > **OAuth client ID**
-3. **Application type:** Chọn **Web application**
-4. **Name:** `Autoland Monitoring Web Client`
-5. **Authorized redirect URIs:** ⚠️ **QUAN TRỌNG - Phải chính xác 100%**
-   
-   **Thêm redirect URI cho production:**
-   ```
-   https://autoland.amoict.com/api/test/gmail/callback
-   ```
-   
-   **Lưu ý:**
-   - ✅ Copy-paste để tránh lỗi đánh máy
-   - ✅ Phải dùng `https://` với domain production
-   - ✅ Không có dấu `/` ở cuối
-   - ✅ Không có khoảng trắng thừa
-   - ✅ Domain phải khớp chính xác với domain đã map trong Cloud Run
-   - ⚠️ **Nếu cần test local, thêm localhost URIs sau khi deploy production xong** (xem [DEVELOPMENT.md](./DEVELOPMENT.md))
-
-6. Click **CREATE**
-7. **Lưu lại:**
-   - **Client ID** (ví dụ: `123456789-abc.apps.googleusercontent.com`)
-   - **Client Secret** (ví dụ: `GOCSPX-xxxxx`)
-   
-   **⚠️ Lưu ý:** Copy chính xác, không có khoảng trắng thừa!
-
----
-
-## Bước 9: Setup Database (Cloud SQL)
+## Bước 8: Setup Database (Cloud SQL)
 
 **⚠️ QUAN TRỌNG:** Đảm bảo đã link billing account ở Bước 3 trước khi tạo Cloud SQL instance. Cloud SQL là dịch vụ có phí và yêu cầu billing account.
 
@@ -448,7 +449,266 @@ Output sẽ là: `PROJECT_ID:asia-southeast1:autoland-db`
 
 ---
 
-## Bước 10: Setup Pub/Sub và Cloud Functions
+## Bước 9: Cấu hình Secret Manager (Database)
+
+Tạo secret cho database password trước khi deploy Cloud Run:
+
+```bash
+export PROJECT_ID="autoland-monitoring"
+# ⚠️ Sử dụng CÙNG password đã dùng khi tạo Cloud SQL user ở Bước 8
+export DB_PASSWORD="your-db-password"  # Thay bằng password đã tạo
+
+# Tạo secret cho database password
+echo -n "$DB_PASSWORD" | gcloud secrets create autoland-db-password \
+  --data-file=- \
+  --project=$PROJECT_ID
+
+# Tạo Service Account cho Cloud Run
+gcloud iam service-accounts create autoland-monitoring-runner \
+  --display-name="Autoland Monitoring Cloud Run Service Account" \
+  --project=$PROJECT_ID
+
+export SA_EMAIL="autoland-monitoring-runner@$PROJECT_ID.iam.gserviceaccount.com"
+
+# Grant quyền truy cập secret
+gcloud secrets add-iam-policy-binding autoland-db-password \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project=$PROJECT_ID
+
+# Grant Cloud SQL Client role
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/cloudsql.client"
+
+# Grant Storage Admin role
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/storage.admin"
+
+# Grant Document AI API User role
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/documentai.apiUser"
+```
+
+---
+
+## Bước 10: Build Docker Image
+
+### Tạo Artifact Registry repository:
+
+```bash
+export PROJECT_ID="autoland-monitoring"
+export REGION="asia-southeast1"
+export REPO_NAME="autoland-monitoring"
+
+# Tạo repository
+gcloud artifacts repositories create $REPO_NAME \
+  --repository-format=docker \
+  --location=$REGION \
+  --description="Docker repository for Autoland Monitoring" \
+  --project=$PROJECT_ID
+```
+
+### Configure Docker authentication:
+
+```bash
+gcloud auth configure-docker $REGION-docker.pkg.dev --project=$PROJECT_ID
+```
+
+### Build và push Docker image:
+
+```bash
+export IMAGE_NAME="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/autoland-monitoring"
+export IMAGE_TAG="latest"
+
+# Build với Cloud Build (khuyến nghị)
+gcloud builds submit \
+  --tag $IMAGE_NAME:$IMAGE_TAG \
+  --project=$PROJECT_ID
+```
+
+---
+
+## Bước 11: Deploy to Cloud Run
+
+```bash
+export PROJECT_ID="autoland-monitoring"
+export REGION="asia-southeast1"
+export IMAGE_NAME="$REGION-docker.pkg.dev/$PROJECT_ID/autoland-monitoring/autoland-monitoring:latest"
+export SA_EMAIL="autoland-monitoring-runner@$PROJECT_ID.iam.gserviceaccount.com"
+export CONNECTION_NAME="$PROJECT_ID:asia-southeast1:autoland-db"
+
+# Deploy
+gcloud run deploy autoland-monitoring \
+  --image $IMAGE_NAME \
+  --region $REGION \
+  --platform managed \
+  --allow-unauthenticated \
+  --service-account $SA_EMAIL \
+  --add-cloudsql-instances $CONNECTION_NAME \
+  --set-env-vars "APP_ENV=production" \
+  --set-env-vars "DB_HOST=/cloudsql/$CONNECTION_NAME" \
+  --set-env-vars "DB_PORT=5432" \
+  --set-env-vars "DB_NAME=autoland" \
+  --set-env-vars "DB_USER=autoland" \
+  --set-secrets "DB_PASSWORD=autoland-db-password:latest" \
+  --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID" \
+  --set-env-vars "GCP_STORAGE_BUCKET=autoland-reports" \
+  --set-env-vars "DOCUMENT_AI_PROCESSOR_ID=projects/$PROJECT_ID/locations/asia-southeast1/processors/YOUR_PROCESSOR_ID" \
+  --set-env-vars "NEXT_PUBLIC_APP_URL=https://YOUR_DOMAIN" \
+  --memory 1Gi \
+  --cpu 1 \
+  --timeout 300 \
+  --min-instances 0 \
+  --max-instances 10 \
+  --project=$PROJECT_ID
+```
+
+**Lưu ý:**
+- Thay `YOUR_PROCESSOR_ID` bằng Processor ID từ Bước 6
+- Thay `YOUR_DOMAIN` bằng domain sẽ map (VD: `autoland.blocksync.me`)
+
+---
+
+## Bước 12: Map Custom Domain
+
+### Cấu hình DNS trước:
+
+Thêm DNS records cho subdomain của bạn:
+
+| Type | Name | Value |
+|------|------|-------|
+| **CNAME** | `autoland` | `ghs.googlehosted.com.` |
+
+**Hoặc** nếu dùng A records:
+
+| Type | Name | Value |
+|------|------|-------|
+| **A** | `autoland` | `216.239.32.21` |
+| **A** | `autoland` | `216.239.34.21` |
+| **A** | `autoland` | `216.239.36.21` |
+| **A** | `autoland` | `216.239.38.21` |
+
+### Map domain với Cloud Run:
+
+```bash
+export PROJECT_ID="autoland-monitoring"
+export REGION="asia-southeast1"
+export DOMAIN="autoland.yourdomain.com"  # Thay bằng domain của bạn
+
+gcloud run domain-mappings create \
+  --service=autoland-monitoring \
+  --domain=$DOMAIN \
+  --region=$REGION \
+  --project=$PROJECT_ID
+```
+
+### Verify domain mapping:
+
+```bash
+gcloud run domain-mappings describe $DOMAIN \
+  --region=$REGION \
+  --project=$PROJECT_ID
+```
+
+**Lưu ý:** DNS propagation có thể mất 5-30 phút. Đợi domain hoạt động trước khi tiếp tục Bước 14.
+
+---
+
+## Bước 13: Run Database Migrations
+
+### Connect to Cloud SQL:
+
+```bash
+export PROJECT_ID="autoland-monitoring"
+
+# Connect to Cloud SQL
+gcloud sql connect autoland-db --user=autoland --project=$PROJECT_ID
+```
+
+### Run migrations trong psql:
+
+```sql
+-- Run migration 1
+\i database/migrations/001_create_autoland_tables.sql
+
+-- Run migration 2
+\i database/migrations/002_create_dashboard_tables.sql
+
+-- Run migration 3
+\i database/migrations/003_fix_calculate_autoland_to_go.sql
+
+-- Run migration 4
+\i database/migrations/004_change_visibility_rvr_to_varchar.sql
+
+-- Run migration 5 (Hybrid PDF Parser metrics)
+\i database/migrations/005_add_extraction_metrics.sql
+
+-- Verify tables
+\dt
+
+-- Exit
+\q
+```
+
+---
+
+# PHẦN C: SETUP GMAIL INTEGRATION
+
+> **⚠️ QUAN TRỌNG:** Thực hiện phần này SAU KHI custom domain đã hoạt động (Bước 12)
+
+---
+
+## Bước 14: Setup OAuth2 cho Gmail
+
+**⚠️ QUAN TRỌNG:** 
+- Gmail API yêu cầu OAuth2 cho personal accounts
+- Redirect URI phải là domain đã map ở Bước 12
+
+### Bước 14.1: Tạo OAuth Consent Screen
+
+1. Vào [Google Cloud Console](https://console.cloud.google.com/)
+2. Chọn project của bạn
+3. Vào **APIs & Services** > **OAuth consent screen**
+4. **User Type:** Chọn **External**
+5. Click **CREATE**
+6. **App information:**
+   - **App name:** `Autoland Monitoring`
+   - **User support email:** Email của bạn
+   - **Developer contact:** Email của bạn
+7. Click **SAVE AND CONTINUE**
+8. **Scopes:** Click **ADD OR REMOVE SCOPES**
+   - Tìm và chọn: `https://www.googleapis.com/auth/gmail.readonly`
+   - Click **UPDATE** > **SAVE AND CONTINUE**
+9. **Test users:** Click **ADD USERS**
+   - Thêm email Gmail sẽ nhận report
+   - Click **ADD** > **SAVE AND CONTINUE**
+10. Click **BACK TO DASHBOARD**
+
+### Bước 14.2: Tạo OAuth Client ID
+
+1. Vào **APIs & Services** > **Credentials**
+2. Click **+ CREATE CREDENTIALS** > **OAuth client ID**
+3. **Application type:** Chọn **Web application**
+4. **Name:** `Autoland Monitoring Web Client`
+5. **Authorized redirect URIs:** Thêm URI sau (thay YOUR_DOMAIN bằng domain đã map):
+   ```
+   https://YOUR_DOMAIN/api/test/gmail/callback
+   ```
+   
+   **Ví dụ:**
+   ```
+   https://autoland.blocksync.me/api/test/gmail/callback
+   ```
+
+6. Click **CREATE**
+7. **Lưu lại Client ID và Client Secret**
+
+---
+
+## Bước 15: Setup Pub/Sub và Gmail Watch
 
 Nếu muốn tự động xử lý email qua Pub/Sub, thực hiện các bước sau:
 
@@ -477,9 +737,71 @@ gcloud pubsub topics add-iam-policy-binding $TOPIC_NAME \
 
 **Lưu ý:** `gmail-api-push@system.gserviceaccount.com` là service account của Google, không cần thay đổi.
 
-### Deploy Cloud Function:
+### Grant Permissions cho Build Service Account:
 
-**Lưu ý:** Đảm bảo đã tạo secrets trong Bước 11 (Secret Manager) trước khi deploy.
+**⚠️ BẮT BUỘC:** Trước khi deploy Cloud Function Gen2, cần grant permissions cho default compute service account:
+
+```bash
+export PROJECT_ID="autoland-monitoring"
+
+# Lấy project number
+export PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+
+# Grant cloudbuild.builds.builder role (BẮT BUỘC cho Cloud Functions Gen2)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member=serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+  --role=roles/cloudbuild.builds.builder
+
+# Grant logging.logWriter để function có thể ghi logs
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member=serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+  --role=roles/logging.logWriter
+
+# Grant artifactregistry.writer để push Docker image
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member=serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com \
+  --role=roles/artifactregistry.writer
+```
+
+**Lưu ý:** Đợi 1-2 phút sau khi grant permissions trước khi deploy.
+
+### Tạo Secrets cho Cloud Function:
+
+**⚠️ BẮT BUỘC:** Tạo các secrets trong Secret Manager trước khi deploy Cloud Function:
+
+```bash
+export PROJECT_ID="autoland-monitoring"
+export SA_EMAIL="autoland-service@$PROJECT_ID.iam.gserviceaccount.com"
+export GOOGLE_CLIENT_SECRET="GOCSPX-your-client-secret"  # Thay bằng Client Secret thật
+
+# 1. Tạo secret cho Google Client Secret
+echo -n "$GOOGLE_CLIENT_SECRET" | gcloud secrets create google-client-secret \
+  --data-file=- \
+  --project=$PROJECT_ID
+
+# Grant quyền cho service account
+gcloud secrets add-iam-policy-binding google-client-secret \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project=$PROJECT_ID
+
+# 2. Tạo placeholder cho OAuth Refresh Token (sẽ update sau khi chạy setup-gmail-watch.js)
+echo -n "placeholder-will-update-after-gmail-watch-setup" | gcloud secrets create gmail-oauth-refresh-token \
+  --data-file=- \
+  --project=$PROJECT_ID
+
+# Grant quyền cho service account
+gcloud secrets add-iam-policy-binding gmail-oauth-refresh-token \
+  --member="serviceAccount:$SA_EMAIL" \
+  --role="roles/secretmanager.secretAccessor" \
+  --project=$PROJECT_ID
+```
+
+**Lưu ý:** 
+- `google-client-secret`: Lấy từ Google Cloud Console > APIs & Services > Credentials > OAuth 2.0 Client IDs
+- `gmail-oauth-refresh-token`: Sẽ được update sau khi chạy `setup-gmail-watch.js` (xem phần Setup Gmail Watch)
+
+### Deploy Cloud Function:
 
 ```bash
 cd cloud-functions/gmail-pubsub-processor
@@ -494,9 +816,9 @@ export TOPIC_NAME="gmail-notifications"
 export FUNCTION_NAME="gmail-pubsub-processor"
 export REGION="asia-southeast1"
 export SA_EMAIL="autoland-service@$PROJECT_ID.iam.gserviceaccount.com"
-export CONNECTION_NAME="$PROJECT_ID:asia-southeast1:autoland-db"
 
 # Deploy với custom service account và Secret Manager
+# Lưu ý: Cloud Function gửi PDF đến API endpoint, không cần kết nối trực tiếp Cloud SQL
 gcloud functions deploy $FUNCTION_NAME \
   --gen2 \
   --runtime=nodejs20 \
@@ -505,17 +827,11 @@ gcloud functions deploy $FUNCTION_NAME \
   --entry-point=processGmailNotification \
   --trigger-topic=$TOPIC_NAME \
   --service-account=$SA_EMAIL \
-  --add-cloudsql-instances=$CONNECTION_NAME \
   --set-env-vars="GCP_PROJECT_ID=$PROJECT_ID" \
   --set-env-vars="GCP_STORAGE_BUCKET=autoland-reports" \
   --set-env-vars="DOCUMENT_AI_PROCESSOR_ID=projects/$PROJECT_ID/locations/asia-southeast1/processors/YOUR_PROCESSOR_ID" \
-  --set-env-vars="DB_HOST=/cloudsql/$CONNECTION_NAME" \
-  --set-env-vars="DB_PORT=5432" \
-  --set-env-vars="DB_NAME=autoland" \
-  --set-env-vars="DB_USER=autoland" \
   --set-env-vars="GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
-  --set-env-vars="API_BASE_URL=https://autoland.amoict.com" \
-  --set-secrets="DB_PASSWORD=autoland-db-password:latest" \
+  --set-env-vars="API_BASE_URL=https://YOUR_DOMAIN" \
   --set-secrets="GOOGLE_CLIENT_SECRET=google-client-secret:latest" \
   --set-secrets="OAUTH_REFRESH_TOKEN=gmail-oauth-refresh-token:latest" \
   --memory=2GB \
@@ -544,16 +860,24 @@ npm install googleapis
 **Cho Cloud Shell hoặc remote servers (Manual Flow - Khuyến nghị):**
 
 ```bash
+cd ~/your-project-folder  # Thư mục chứa project
+
+# Install dependencies nếu chưa có
+npm install
+
 # Export các biến môi trường
 export GCP_PROJECT_ID="autoland-monitoring"
 export GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"  # Từ OAuth2 credentials
 export GOOGLE_CLIENT_SECRET="GOCSPX-your-client-secret"  # Từ OAuth2 credentials
+export GOOGLE_REDIRECT_URI="https://YOUR_DOMAIN/api/test/gmail/callback"  # Domain đã map ở Bước 12
 export PUBSUB_TOPIC="gmail-notifications"
 export MANUAL_FLOW=true  # Bật manual flow cho Cloud Shell
 
 # Chạy script
 node scripts/setup-gmail-watch.js
 ```
+
+**⚠️ QUAN TRỌNG:** `GOOGLE_REDIRECT_URI` phải khớp với redirect URI đã cấu hình trong OAuth2 Client (Bước 14)
 
 **Quy trình Manual Flow:**
 1. Script sẽ hiển thị URL authorization
@@ -568,6 +892,19 @@ node scripts/setup-gmail-watch.js
 - Gmail Watch expires sau 7 ngày, cần renew định kỳ
 - Refresh token sẽ được lưu để có thể refresh access token khi cần
 - Xem phần "Setup Cloud Scheduler để tự động renew Watch" bên dưới
+
+**⚠️ QUAN TRỌNG: Sau khi chạy script, cập nhật refresh token vào Secret Manager:**
+
+```bash
+# Copy refresh token từ output của script (bắt đầu bằng "1//0g...")
+export REFRESH_TOKEN="1//0g..."  # Thay bằng refresh token thực tế
+export PROJECT_ID="autoland-monitoring"
+
+# Update secret (secret đã được tạo từ bước trước)
+echo -n "$REFRESH_TOKEN" | gcloud secrets versions add gmail-oauth-refresh-token \
+  --data-file=- \
+  --project=$PROJECT_ID
+```
 
 ### Setup Gmail Watch Renewal Automation
 
@@ -591,16 +928,13 @@ export PUBSUB_TOPIC="gmail-notifications"
 node scripts/setup-gmail-watch.js
 # Copy refresh token từ output (bắt đầu bằng "1//0g...")
 
-# --- Step 2: Store Refresh Token in Secret Manager ---
+# --- Step 2: Update Refresh Token in Secret Manager ---
+# (Secret đã được tạo từ bước "Tạo Secrets cho Cloud Function")
 export PROJECT_ID="autoland-monitoring"
 export REFRESH_TOKEN="1//0g..."  # Thay bằng refresh token thực tế
 
-echo -n "$REFRESH_TOKEN" | gcloud secrets create gmail-oauth-refresh-token \
+echo -n "$REFRESH_TOKEN" | gcloud secrets versions add gmail-oauth-refresh-token \
   --data-file=- --project=$PROJECT_ID
-
-gcloud secrets add-iam-policy-binding gmail-oauth-refresh-token \
-  --member="serviceAccount:autoland-service@$PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor" --project=$PROJECT_ID
 
 # --- Step 3: Deploy Cloud Function ---
 cd cloud-functions/renew-gmail-watch
@@ -691,282 +1025,11 @@ Pub/Sub Topic (gmail-notifications)
 
 ---
 
-## Bước 11: Cấu hình Secret Manager
-
-Tất cả các secrets và sensitive data sẽ được lưu trong Secret Manager để đảm bảo bảo mật.
-
-### Tạo các secrets:
-
-**⚠️ QUAN TRỌNG:** Password trong secret `autoland-db-password` PHẢI khớp chính xác với password đã tạo cho Cloud SQL user ở Bước 9.
-
-```bash
-export PROJECT_ID="autoland-monitoring"
-# ⚠️ Sử dụng CÙNG password đã dùng khi tạo Cloud SQL user ở Bước 9
-# Ví dụ: Nếu ở Bước 9 bạn dùng password "Abcxyz", thì ở đây cũng phải dùng "Abcxyz"
-export DB_PASSWORD="Abcxyz"  # Thay bằng password đã tạo cho Cloud SQL user
-export GOOGLE_CLIENT_SECRET="GOCSPX-your-client-secret"  # Từ OAuth2 credentials
-
-# 1. Database password
-echo -n "$DB_PASSWORD" | gcloud secrets create autoland-db-password \
-  --data-file=- \
-  --project=$PROJECT_ID
-
-# 2. Service Account key (từ file gcp-key.json)
-gcloud secrets create gcp-service-account-key \
-  --data-file=./gcp-key.json \
-  --project=$PROJECT_ID
-
-# 3. OAuth2 Client Secret
-echo -n "$GOOGLE_CLIENT_SECRET" | gcloud secrets create google-client-secret \
-  --data-file=- \
-  --project=$PROJECT_ID
-```
-
-### Grant quyền truy cập secrets cho service account:
-
-```bash
-export SA_EMAIL="autoland-monitoring-runner@$PROJECT_ID.iam.gserviceaccount.com"
-
-# Grant quyền cho tất cả secrets
-gcloud secrets add-iam-policy-binding autoland-db-password \
-  --member="serviceAccount:$SA_EMAIL" \
-  --role="roles/secretmanager.secretAccessor" \
-  --project=$PROJECT_ID
-
-gcloud secrets add-iam-policy-binding gcp-service-account-key \
-  --member="serviceAccount:$SA_EMAIL" \
-  --role="roles/secretmanager.secretAccessor" \
-  --project=$PROJECT_ID
-
-gcloud secrets add-iam-policy-binding google-client-secret \
-  --member="serviceAccount:$SA_EMAIL" \
-  --role="roles/secretmanager.secretAccessor" \
-  --project=$PROJECT_ID
-```
-
-**Lưu ý:** 
-- Tất cả secrets sẽ được sử dụng trong Cloud Run deployment
-- Không lưu secrets trong environment variables trực tiếp
-- Secrets được inject vào container thông qua `--set-secrets` flag
+# PHẦN D: VERIFY & AUTOMATION
 
 ---
 
-## Bước 12: Build Docker Image
-
-### Tạo Artifact Registry repository:
-
-```bash
-export PROJECT_ID="autoland-monitoring"
-export REGION="asia-southeast1"
-export REPO_NAME="autoland-monitoring"
-
-# Tạo repository
-gcloud artifacts repositories create $REPO_NAME \
-  --repository-format=docker \
-  --location=$REGION \
-  --description="Docker repository for Autoland Monitoring" \
-  --project=$PROJECT_ID
-```
-
-### Configure Docker authentication:
-
-```bash
-gcloud auth configure-docker $REGION-docker.pkg.dev --project=$PROJECT_ID
-```
-
-### Build và push Docker image:
-
-```bash
-export IMAGE_NAME="$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/autoland-monitoring"
-export IMAGE_TAG="latest"
-
-# Build image
-docker build -t $IMAGE_NAME:$IMAGE_TAG -f docker/Dockerfile .
-
-# Push image
-docker push $IMAGE_NAME:$IMAGE_TAG
-```
-
-Hoặc sử dụng Cloud Build:
-
-```bash
-# Build với Cloud Build
-gcloud builds submit \
-  --tag $IMAGE_NAME:$IMAGE_TAG \
-  --project=$PROJECT_ID
-```
-
----
-
-## Bước 13: Deploy to Cloud Run
-
-### Tạo Service Account cho Cloud Run:
-
-```bash
-export PROJECT_ID="autoland-monitoring"
-
-# Tạo service account
-gcloud iam service-accounts create autoland-monitoring-runner \
-  --display-name="Autoland Monitoring Cloud Run Service Account" \
-  --project=$PROJECT_ID
-
-export SA_EMAIL="autoland-monitoring-runner@$PROJECT_ID.iam.gserviceaccount.com"
-
-# Grant Cloud Run Invoker role
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:$SA_EMAIL" \
-  --role="roles/run.invoker"
-
-# Grant Cloud SQL Client role
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:$SA_EMAIL" \
-  --role="roles/cloudsql.client"
-
-# Grant Storage Admin role
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:$SA_EMAIL" \
-  --role="roles/storage.admin"
-
-# Grant Document AI API User role
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:$SA_EMAIL" \
-  --role="roles/documentai.apiUser"
-```
-
-### Deploy to Cloud Run:
-
-```bash
-export PROJECT_ID="autoland-monitoring"
-export REGION="asia-southeast1"
-export IMAGE_NAME="$REGION-docker.pkg.dev/$PROJECT_ID/autoland-monitoring/autoland-monitoring:latest"
-export SA_EMAIL="autoland-monitoring-runner@$PROJECT_ID.iam.gserviceaccount.com"
-export CONNECTION_NAME="$PROJECT_ID:asia-southeast1:autoland-db"
-
-# Deploy
-gcloud run deploy autoland-monitoring \
-  --image $IMAGE_NAME \
-  --region $REGION \
-  --platform managed \
-  --allow-unauthenticated \
-  --service-account $SA_EMAIL \
-  --add-cloudsql-instances $CONNECTION_NAME \
-  --set-env-vars "APP_ENV=production" \
-  --set-env-vars "DB_HOST=/cloudsql/$CONNECTION_NAME" \
-  --set-env-vars "DB_PORT=5432" \
-  --set-env-vars "DB_NAME=autoland" \
-  --set-env-vars "DB_USER=autoland" \
-  --set-secrets "DB_PASSWORD=autoland-db-password:latest" \
-  --set-env-vars "GCP_PROJECT_ID=$PROJECT_ID" \
-  --set-env-vars "GCP_STORAGE_BUCKET=autoland-reports" \
-  --set-env-vars "DOCUMENT_AI_PROCESSOR_ID=projects/$PROJECT_ID/locations/asia-southeast1/processors/YOUR_PROCESSOR_ID" \
-  --set-env-vars "GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com" \
-  --set-secrets "GOOGLE_CLIENT_SECRET=google-client-secret:latest" \
-  --set-secrets "GCP_KEY_FILE=gcp-service-account-key:latest" \
-  --set-env-vars "GOOGLE_REDIRECT_URI=https://autoland.amoict.com/api/test/gmail/callback" \
-  --set-env-vars "NEXT_PUBLIC_APP_URL=https://autoland.amoict.com" \
-  --memory 1Gi \
-  --cpu 1 \
-  --timeout 300 \
-  --min-instances 1 \
-  --max-instances 10 \
-  --project=$PROJECT_ID
-```
-
-**Lưu ý:**
-- Thay `YOUR_PROCESSOR_ID` bằng Processor ID từ Bước 6
-- Thay `your-client-id` bằng OAuth2 Client ID từ Bước 8
-- Tất cả secrets đã được tạo trong Bước 11 (Secret Manager)
-- Production domain: `https://autoland.amoict.com`
-- Tất cả sensitive data được lưu trong Secret Manager, không hardcode trong environment variables
-
-### Map Custom Domain (autoland.amoict.com):
-
-Sau khi deploy, cần map custom domain `autoland.amoict.com` với Cloud Run service:
-
-```bash
-export PROJECT_ID="autoland-monitoring"
-export REGION="asia-southeast1"
-export DOMAIN="autoland.amoict.com"
-
-# Map domain với Cloud Run service
-gcloud run domain-mappings create \
-  --service=autoland-monitoring \
-  --domain=$DOMAIN \
-  --region=$REGION \
-  --project=$PROJECT_ID
-```
-
-**Lưu ý:** Sau khi map domain, bạn cần:
-1. Cập nhật DNS records cho `autoland.amoict.com` theo hướng dẫn từ Google Cloud Console
-2. Đợi DNS propagation (có thể mất vài phút đến vài giờ)
-3. Verify domain mapping trong Cloud Run Console
-
----
-
-## Bước 14: Run Database Migrations
-
-### Connect to Cloud SQL:
-
-```bash
-export PROJECT_ID="autoland-monitoring"
-
-# Connect to Cloud SQL
-gcloud sql connect autoland-db --user=autoland --project=$PROJECT_ID
-```
-
-### Run migrations trong psql:
-
-```sql
--- Run migration 1
-\i database/migrations/001_create_autoland_tables.sql
-
--- Run migration 2
-\i database/migrations/002_create_dashboard_tables.sql
-
--- Run migration 3
-\i database/migrations/003_fix_calculate_autoland_to_go.sql
-
--- Run migration 4
-\i database/migrations/004_change_visibility_rvr_to_varchar.sql
-
--- Run migration 5 (NEW - Hybrid PDF Parser metrics)
-\i database/migrations/005_add_extraction_metrics.sql
-
--- Verify tables
-\dt
-
--- Verify new columns from migration 5
-SELECT column_name, data_type, column_default
-FROM information_schema.columns
-WHERE table_name = 'autoland_reports'
-  AND column_name IN ('extraction_method', 'extraction_cost', 'extraction_cost_saved');
-
--- Exit
-\q
-```
-
-Hoặc sử dụng Cloud SQL Proxy:
-
-```bash
-# Download Cloud SQL Proxy
-curl -o cloud-sql-proxy https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.8.0/cloud-sql-proxy.linux.amd64
-chmod +x cloud-sql-proxy
-
-# Start proxy
-./cloud-sql-proxy $PROJECT_ID:asia-southeast1:autoland-db
-
-# Trong terminal khác, run migrations
-export PGPASSWORD=YOUR_PASSWORD
-psql -h 127.0.0.1 -U autoland -d autoland -f database/migrations/001_create_autoland_tables.sql
-psql -h 127.0.0.1 -U autoland -d autoland -f database/migrations/002_create_dashboard_tables.sql
-psql -h 127.0.0.1 -U autoland -d autoland -f database/migrations/003_fix_calculate_autoland_to_go.sql
-psql -h 127.0.0.1 -U autoland -d autoland -f database/migrations/004_change_visibility_rvr_to_varchar.sql
-psql -h 127.0.0.1 -U autoland -d autoland -f database/migrations/005_add_extraction_metrics.sql
-```
-
----
-
-## Bước 15: Verify Deployment
+## Bước 17: Verify Deployment
 
 ### Check service status:
 

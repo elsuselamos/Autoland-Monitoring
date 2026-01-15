@@ -1,6 +1,6 @@
 # Memory Bank - Autoland Monitoring Project
 
-**Last Updated:** 2025-12-30
+**Last Updated:** 2026-01-15
 **Purpose:** Central repository for important project context, decisions, and changes
 
 ---
@@ -217,6 +217,65 @@ PDF File → pdf2json (FREE) → Regex Parser → SUCCESS ✅
 
 ## 🔄 Recent Changes
 
+### Production Deployment Review (2026-01-15)
+
+**Objective:** Rà soát toàn bộ codebase và sửa lỗi trước khi deploy lên Google Cloud
+
+**Critical Issues Fixed:**
+
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | `gcp-key.json` not in `.gitignore` | Added to `.gitignore` |
+| 2 | Dockerfile missing build step | Rewrote with standalone output |
+| 3 | `docker-compose.yml` wrong path | Fixed volumes |
+| 4 | `cloudbuild.yaml` using gcr.io | Changed to Artifact Registry |
+| 5 | Cloud Function missing OAuth2 | Added OAuth2 token handling |
+
+**README Reorganization:**
+
+New structure for production deployment with custom domain:
+
+```
+PHẦN A: INFRASTRUCTURE (Bước 1-9)
+├── Google Cloud Account & CLI
+├── Project & Enable APIs (including Eventarc)
+├── Service Account & Document AI
+├── Cloud Storage & Cloud SQL
+└── Secret Manager (DB password)
+
+PHẦN B: DEPLOY APPLICATION (Bước 10-13)
+├── Build Docker Image
+├── Deploy to Cloud Run
+├── ⭐ MAP CUSTOM DOMAIN
+└── Run Database Migrations
+
+PHẦN C: GMAIL INTEGRATION (Bước 14-17)
+├── Setup OAuth2 (redirect URI = custom domain)
+├── Setup Pub/Sub Topic
+├── Setup Gmail Watch
+└── Deploy Cloud Functions
+
+PHẦN D: VERIFY & AUTOMATION (Bước 17-18)
+├── Verify Deployment
+└── Setup Gmail Watch Renewal Automation
+```
+
+**Key Insight:** OAuth2 requires redirect URI that matches a live domain. Must deploy Cloud Run and map custom domain BEFORE setting up OAuth2.
+
+**Files Modified:**
+- `.gitignore` - Security fix
+- `docker/Dockerfile` - Complete rewrite
+- `next.config.js` - Added `output: 'standalone'`
+- `docker-compose.yml` - Fixed volumes
+- `cloudbuild.yaml` - Artifact Registry
+- `cloud-functions/gmail-pubsub-processor/index.js` - OAuth2 handling
+- `src/app/api/reports/process-internal/route.ts` - Accept PDF directly
+- `README.md` - Major reorganization
+
+**Session Log:** `.beads/deployment-review-session-2026-01-15.md`
+
+---
+
 ### Hybrid PDF Parser Implementation (2025-12-30)
 **Objective:** Reduce Document AI costs by 80-90%
 
@@ -302,6 +361,30 @@ PDF File → pdf2json (FREE) → Regex Parser → SUCCESS ✅
 
 ## 🚀 Deployment
 
+### Current Deployment Status (2026-01-15)
+
+**Project:** `autoland-monitoring-test`
+**Target Domain:** `autoland.blocksync.me`
+
+| Component | Status |
+|-----------|--------|
+| Cloud Function `gmail-pubsub-processor` | ✅ Deployed |
+| Pub/Sub Topic `gmail-notifications` | ✅ Created |
+| Secret `google-client-secret` | ✅ Created |
+| Secret `gmail-oauth-refresh-token` | ⚠️ Placeholder (needs update) |
+| Cloud Run (Next.js) | ❌ Not deployed |
+| Custom Domain Mapping | ❌ Not done |
+| OAuth2 Setup | ❌ Not done |
+| Gmail Watch | ❌ Not done |
+| Database Migrations | ❌ Not run |
+
+**Next Steps:**
+1. Deploy Cloud Run
+2. Map custom domain
+3. Setup OAuth2 with production redirect URI
+4. Run Gmail Watch setup
+5. Update refresh token in Secret Manager
+
 ### Environment Variables
 - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
 - `GCP_PROJECT_ID`, `GCP_KEY_FILE` (for PDF downloads, Gmail API, Document AI)
@@ -332,6 +415,7 @@ PDF File → pdf2json (FREE) → Regex Parser → SUCCESS ✅
 
 ### Improvement Documentation
 - `.beads/ux-ui-improvements-2025-12-28.md` - Recent UX/UI improvements
+- `.beads/deployment-review-session-2026-01-15.md` - Production deployment review session
 
 ### Other Documentation
 - `.beads/implementation-plan.md` - Detailed implementation plan
