@@ -168,12 +168,64 @@ if (timeUtcStr instanceof Date) {
 const datetimeUtc = `${dateUtcStr}T${timeUtcStr}:00+00`
 ```
 
-**Deployment Status:** ⏳ **PENDING DEPLOYMENT** to Cloud Run `autoland-api`
+**Deployment Status:** ✅ **DEPLOYED** to Cloud Run `autoland-vj`
 **Commit:** `f8156f5`
+**Verification:** New error appeared, confirming timestamp fix was deployed but revealed next issue
+
+---
+
+#### Bug #4: PostgreSQL VARCHAR(10) Constraint Violation
+
+**Issue:** After Bug #3 fix was deployed, API returned error:
+```
+Error in fallback message fetching: AxiosError: Request failed with status code 500
+value too long for type character varying(10)
+```
+
+**Root Cause:** PDF parser extracted field values that exceeded database column length limits:
+- `aircraft_reg VARCHAR(20)` - adequate
+- `airport VARCHAR(10)` - may be exceeded
+- `runway VARCHAR(10)` - may be exceeded if runway code includes additional characters
+
+**Fix Applied:**
+```typescript
+// File: src/app/api/reports/process-internal/route.ts:110-127
+// Step 3: Validate and truncate field lengths to match database constraints
+// aircraft_reg: VARCHAR(20)
+const aircraftRegTruncated = parsedData.aircraft_reg?.substring(0, 20) || null
+// airport: VARCHAR(10)
+const airportTruncated = parsedData.airport?.substring(0, 10) || null
+// runway: VARCHAR(10)
+const runwayTruncated = parsedData.runway?.substring(0, 10) || null
+
+// Log warnings if truncation occurred
+if (parsedData.aircraft_reg?.length > 20) {
+  console.warn(`aircraft_reg truncated from ${parsedData.aircraft_reg.length} to 20 chars: ${parsedData.aircraft_reg} -> ${aircraftRegTruncated}`)
+}
+if (parsedData.airport?.length > 10) {
+  console.warn(`airport truncated from ${parsedData.airport.length} to 10 chars: ${parsedData.airport} -> ${airportTruncated}`)
+}
+if (parsedData.runway?.length > 10) {
+  console.warn(`runway truncated from ${parsedData.runway.length} to 10 chars: ${parsedData.runway} -> ${runwayTruncated}`)
+}
+```
+
+**Database INSERT updated to use truncated values:**
+```typescript
+// Lines 186-189 in database INSERT statement
+aircraftRegTruncated,
+parsedData.flight_number,
+airportTruncated,
+runwayTruncated,
+```
+
+**Deployment Status:** ⏳ **PENDING DEPLOYMENT** to Cloud Run `autoland-vj`
+**Commit:** `605dc95`
 **Next Steps:**
-1. Build and push new Docker image with this fix
+1. Build and push new Docker image with Bug #3 + Bug #4 fixes
 2. Deploy to Cloud Run
 3. Test end-to-end with real Gmail email
+4. Monitor logs for truncation warnings to identify which fields need schema updates
 
 ---
 
