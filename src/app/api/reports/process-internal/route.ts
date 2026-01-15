@@ -107,7 +107,26 @@ export async function POST(request: Request) {
 
     const parsedData = parseResult.data
 
-    // Step 3: Check for duplicate reports
+    // Step 3: Validate and truncate field lengths to match database constraints
+    // aircraft_reg: VARCHAR(20)
+    const aircraftRegTruncated = parsedData.aircraft_reg?.substring(0, 20) || null
+    // airport: VARCHAR(10)
+    const airportTruncated = parsedData.airport?.substring(0, 10) || null
+    // runway: VARCHAR(10)
+    const runwayTruncated = parsedData.runway?.substring(0, 10) || null
+
+    // Log warnings if truncation occurred
+    if (parsedData.aircraft_reg?.length > 20) {
+      console.warn(`aircraft_reg truncated from ${parsedData.aircraft_reg.length} to 20 chars: ${parsedData.aircraft_reg} -> ${aircraftRegTruncated}`)
+    }
+    if (parsedData.airport?.length > 10) {
+      console.warn(`airport truncated from ${parsedData.airport.length} to 10 chars: ${parsedData.airport} -> ${airportTruncated}`)
+    }
+    if (parsedData.runway?.length > 10) {
+      console.warn(`runway truncated from ${parsedData.runway.length} to 10 chars: ${parsedData.runway} -> ${runwayTruncated}`)
+    }
+
+    // Step 4: Check for duplicate reports
     const existingReport = await db.query(
       "SELECT id FROM autoland_reports WHERE report_number = $1",
       [parsedData.report_number]
@@ -164,10 +183,10 @@ export async function POST(request: Request) {
       ) RETURNING id`,
       [
         parsedData.report_number,
-        parsedData.aircraft_reg,
+        aircraftRegTruncated,
         parsedData.flight_number,
-        parsedData.airport,
-        parsedData.runway,
+        airportTruncated,
+        runwayTruncated,
         parsedData.captain,
         parsedData.first_officer,
         dateUtcStr,
@@ -214,7 +233,7 @@ export async function POST(request: Request) {
       data: {
         reportId,
         reportNumber: parsedData.report_number,
-        aircraftReg: parsedData.aircraft_reg,
+        aircraftReg: aircraftRegTruncated,
         flightNumber: parsedData.flight_number,
         result: parsedData.result,
         pdfStoragePath: storagePath,
