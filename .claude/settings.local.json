@@ -5,7 +5,10 @@
       "Bash(npm run type-check:*)",
       "Bash(curl:*)",
       "Bash(npm install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(dir)",
+      "Bash(gcloud functions deploy:*)",
+      "Bash(git add:*)"
     ]
   }
 }

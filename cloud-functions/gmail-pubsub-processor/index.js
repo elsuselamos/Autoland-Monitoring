@@ -40,21 +40,26 @@ exports.processGmailNotification = async (cloudEvent) => {
     let base64Data;
     
     if (cloudEvent.data?.message?.data) {
-      // Format 1: Wrapped format
+      // Format 1: Wrapped format (Pub/Sub message wrapped in CloudEvent)
       base64Data = cloudEvent.data.message.data;
       console.log('Using wrapped format: cloudEvent.data.message.data');
     } else if (typeof cloudEvent.data === 'string') {
       // Format 2: Direct base64 string
       base64Data = cloudEvent.data;
-      console.log('Using direct format: cloudEvent.data');
+      console.log('Using direct format: cloudEvent.data (string)');
+    } else if (Buffer.isBuffer(cloudEvent.data)) {
+      // Format 3: CloudEvent.data is a Buffer (Cloud Functions Gen2)
+      base64Data = cloudEvent.data.toString('base64');
+      console.log('Using buffer format: cloudEvent.data (Buffer)');
     } else if (cloudEvent.data?.data) {
-      // Format 3: cloudEvent.data.data
+      // Format 4: cloudEvent.data.data
       base64Data = cloudEvent.data.data;
       console.log('Using format: cloudEvent.data.data');
     } else {
       console.error('Invalid Pub/Sub message format');
       console.error('cloudEvent structure:', Object.keys(cloudEvent));
       console.error('cloudEvent.data type:', typeof cloudEvent.data);
+      console.error('cloudEvent.data:', JSON.stringify(cloudEvent.data));
       if (cloudEvent.data) {
         console.error('cloudEvent.data keys:', Object.keys(cloudEvent.data));
       }
