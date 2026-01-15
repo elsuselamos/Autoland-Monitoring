@@ -1,10 +1,8 @@
 "use client"
 
-import { useEffect, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Chart as ChartJS, ChartOptions, TimeScale, LinearScale, Point, LineElement, Title, Tooltip, Legend } from "chart.js/auto"
-import { Line as ChartReact } from "react-chartjs-2"
-import { TrendingUp, TrendingDown } from "lucide-react"
+import { ChartOptions } from "chart.js/auto"
+import { Line } from "react-chartjs-2"
 import type { Aircraft } from "@/types"
 
 interface AircraftTrendChartProps {
@@ -13,8 +11,6 @@ interface AircraftTrendChartProps {
 }
 
 export function AircraftTrendChart({ aircraft, height = 300 }: AircraftTrendChartProps) {
-  const chartRef = useRef<ChartJS | null>(null)
-
   // Mock data - should be fetched from API
   const chartData = {
     labels: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
@@ -92,56 +88,31 @@ export function AircraftTrendChart({ aircraft, height = 300 }: AircraftTrendChar
         mode: "index" as const,
         intersect: false,
         callbacks: {
-          title: function(context: any) {
-            let label = context.dataset.label || ""
-            const dataIndex = context.dataIndex
-
-            if (context.parsed.y !== null) {
-              if (dataIndex === 0) {
-                const value = context.parsed.y + "%"
-                const month = context.label
-                label += `: ${value} Success Rate`
-              } else if (dataIndex === 1) {
-                const value = context.parsed.y
-                const month = context.label
-                label += `: ${value} Autolands`
-              }
-            }
-
-            return label
+          title: function(context: any[]) {
+            if (!context.length) return ''
+            return context[0].label // Month name
           },
           label: function(context: any) {
-            return context.label
-          },
-          body: function(tooltipItems: any[]) {
-            const item = tooltipItems[0]
-            const dataIndex = item.dataIndex
-            const datasetIndex = item.datasetIndex
-            const dataset = chartData.datasets[datasetIndex]
-            const month = item.label
-
-            let trendIcon: React.ReactNode = null
-            const prevValue = dataIndex > 0 ? chartData.datasets[0].data[dataIndex - 1] : 0
-            const currentValue = chartData.datasets[0].data[dataIndex]
-            const trend = currentValue - prevValue
-
-            if (trend > 0) {
-              trendIcon = <TrendingUp className="w-4 h-4 text-success ml-2" />
-            } else if (trend < 0) {
-              trendIcon = <TrendingDown className="w-4 h-4 text-error ml-2" />
+            const datasetLabel = context.dataset.label || ''
+            const value = context.parsed.y
+            const dataIndex = context.dataIndex
+            const datasetIndex = context.datasetIndex
+            
+            // Format value based on dataset
+            let formattedValue = datasetIndex === 0 ? `${value}%` : `${value}`
+            
+            // Calculate trend for success rate
+            if (datasetIndex === 0 && dataIndex > 0) {
+              const prevValue = chartData.datasets[0].data[dataIndex - 1]
+              const trend = value - prevValue
+              if (trend > 0) {
+                formattedValue += ` ↑`
+              } else if (trend < 0) {
+                formattedValue += ` ↓`
+              }
             }
-
-            return `
-              <div class="text-sm font-medium text-gray-900">
-                ${month}
-              </div>
-              <div class="flex items-center space-x-2">
-                <span class="text-2xl font-bold ${datasetIndex === 0 ? "text-vj-red" : "text-purple-600"}">
-                  ${item.formattedValue}
-                </span>
-                ${trendIcon}
-              </div>
-            `
+            
+            return `${datasetLabel}: ${formattedValue}`
           },
         },
       },
@@ -161,15 +132,6 @@ export function AircraftTrendChart({ aircraft, height = 300 }: AircraftTrendChar
       },
     },
   }
-
-  // Destroy chart on unmount
-  useEffect(() => {
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy()
-      }
-    }
-  }, [])
 
   return (
     <Card className="hover:shadow-lg transition-shadow">
@@ -192,11 +154,9 @@ export function AircraftTrendChart({ aircraft, height = 300 }: AircraftTrendChar
           </div>
         </div>
         <div style={{ height }}>
-          <canvas ref={chartRef} />
+          <Line data={chartData} options={options} />
         </div>
       </CardContent>
     </Card>
   )
 }
-
-

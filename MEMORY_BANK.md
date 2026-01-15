@@ -10,7 +10,7 @@
 **Project Name:** Autoland Monitoring System  
 **Organization:** Vietjet AMO ICT Department  
 **Purpose:** Hệ thống giám sát Autoland của đội tàu bay VietJet  
-**Tech Stack:** Next.js 14, React 18, TypeScript, Tailwind CSS, PostgreSQL, Google Cloud Platform
+**Tech Stack:** Next.js 14, React 18, TypeScript, Tailwind CSS, PostgreSQL, Google Cloud Platform, Node.js 20
 
 ---
 
@@ -230,10 +230,10 @@ PDF File → pdf2json (FREE) → Regex Parser → SUCCESS ✅
 | Cloud Function `renew-gmail-watch` | ✅ | Auto-renews Gmail Watch |
 | Cloud Scheduler `renew-gmail-watch-weekly` | ✅ | Runs every 6 days |
 | Pub/Sub Topic `gmail-notifications` | ✅ | Gmail push notifications |
-| Gmail Watch | ✅ | Personal Gmail account |
+| Gmail Watch | ✅ | Personal Gmail account (expires 2026-01-22) |
 | Cloud SQL `autoland-db` | ✅ | PostgreSQL 15 |
 | Document AI Processor | ✅ | US region, OCR type |
-| Cloud Run (Next.js) | 🔄 | Building... |
+| Cloud Run (Next.js) | 🔄 | Building with Node 20 |
 
 **Key Learnings:**
 
@@ -254,6 +254,17 @@ PDF File → pdf2json (FREE) → Regex Parser → SUCCESS ✅
    - Updated `setup-gmail-watch.js` to print refresh token
    - Added clear visual output with `━━━` separators
 
+**Build Fixes (2026-01-15):**
+
+| Issue | File | Fix |
+|-------|------|-----|
+| Buffer not assignable to BodyInit | `src/app/api/reports/[id]/pdf/route.ts` | Changed `fileBuffer` → `new Uint8Array(fileBuffer)` |
+| Invalid import | `src/app/api/reports/[id]/route.ts` | Removed unused `@google-cloud/storage/build/node` import |
+| ChartReact type error | `src/components/aircraft/aircraft-trend-chart.tsx` | Changed `useRef<ChartReact>` → removed, used `ChartJS \| null` |
+| beginAt not valid property | `src/components/aircraft/aircraft-trend-chart.tsx` | Changed `beginAt: 80` → `min: 80` |
+| Node engine warnings | `docker/Dockerfile` | Upgraded `node:18-alpine` → `node:20-alpine` |
+| Invalid npm flag | `docker/Dockerfile` | Changed `npm ci --only=production=false` → `npm ci` |
+
 **Resource IDs:**
 
 | Resource | ID |
@@ -263,6 +274,15 @@ PDF File → pdf2json (FREE) → Regex Parser → SUCCESS ✅
 | Service Account | `autoland-service@autoland-monitoring-test.iam.gserviceaccount.com` |
 | Cloud SQL Connection | `autoland-monitoring-test:asia-southeast1:autoland-db` |
 | Storage Bucket | `autoland-reports` |
+| OAuth Client ID | `555768155013-2hm72qls36fd0umk5d6ak0fln422it7r.apps.googleusercontent.com` |
+
+**Secrets in Secret Manager:**
+
+| Secret Name | Purpose |
+|-------------|---------|
+| `google-client-secret` | OAuth2 Client Secret |
+| `gmail-oauth-refresh-token` | Gmail API refresh token (version 5) |
+| `autoland-db-password` | Cloud SQL password |
 
 ---
 
@@ -413,26 +433,30 @@ PHẦN D: VERIFY & AUTOMATION (Bước 17-18)
 ### Current Deployment Status (2026-01-15)
 
 **Project:** `autoland-monitoring-test`
-**Target Domain:** `autoland.blocksync.me`
+**Target Domain:** TBD (after Cloud Run deploy)
 
 | Component | Status |
 |-----------|--------|
 | Cloud Function `gmail-pubsub-processor` | ✅ Deployed |
+| Cloud Function `renew-gmail-watch` | ✅ Deployed |
+| Cloud Scheduler `renew-gmail-watch-weekly` | ✅ Created (every 6 days) |
 | Pub/Sub Topic `gmail-notifications` | ✅ Created |
 | Secret `google-client-secret` | ✅ Created |
-| Secret `gmail-oauth-refresh-token` | ⚠️ Placeholder (needs update) |
-| Cloud Run (Next.js) | ❌ Not deployed |
+| Secret `gmail-oauth-refresh-token` | ✅ Updated (version 5, valid) |
+| Secret `autoland-db-password` | ✅ Created |
+| Gmail Watch | ✅ Active (expires 2026-01-22) |
+| Cloud SQL `autoland-db` | ✅ Running (PostgreSQL 15) |
+| Document AI Processor | ✅ Created (US region) |
+| Cloud Run (Next.js) | 🔄 Building with Node 20 |
 | Custom Domain Mapping | ❌ Not done |
-| OAuth2 Setup | ❌ Not done |
-| Gmail Watch | ❌ Not done |
 | Database Migrations | ❌ Not run |
 
 **Next Steps:**
-1. Deploy Cloud Run
-2. Map custom domain
-3. Setup OAuth2 with production redirect URI
-4. Run Gmail Watch setup
-5. Update refresh token in Secret Manager
+1. Wait for Cloud Build to complete
+2. Deploy Cloud Run
+3. Map custom domain (optional)
+4. Run database migrations
+5. Test application
 
 ### Environment Variables
 - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
