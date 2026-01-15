@@ -33,16 +33,37 @@ exports.processGmailNotification = async (cloudEvent) => {
   console.log('Received CloudEvent:', JSON.stringify(cloudEvent, null, 2));
   
   try {
-    // Extract Pub/Sub message from CloudEvent
-    const pubsubMessage = cloudEvent.data?.message;
-    if (!pubsubMessage || !pubsubMessage.data) {
+    // Extract data from CloudEvent
+    // Cloud Functions Gen2 with Pub/Sub trigger can have different formats:
+    // Format 1: cloudEvent.data.message.data (wrapped)
+    // Format 2: cloudEvent.data (direct base64 string)
+    let base64Data;
+    
+    if (cloudEvent.data?.message?.data) {
+      // Format 1: Wrapped format
+      base64Data = cloudEvent.data.message.data;
+      console.log('Using wrapped format: cloudEvent.data.message.data');
+    } else if (typeof cloudEvent.data === 'string') {
+      // Format 2: Direct base64 string
+      base64Data = cloudEvent.data;
+      console.log('Using direct format: cloudEvent.data');
+    } else if (cloudEvent.data?.data) {
+      // Format 3: cloudEvent.data.data
+      base64Data = cloudEvent.data.data;
+      console.log('Using format: cloudEvent.data.data');
+    } else {
       console.error('Invalid Pub/Sub message format');
+      console.error('cloudEvent structure:', Object.keys(cloudEvent));
+      console.error('cloudEvent.data type:', typeof cloudEvent.data);
+      if (cloudEvent.data) {
+        console.error('cloudEvent.data keys:', Object.keys(cloudEvent.data));
+      }
       return;
     }
     
     // Parse Pub/Sub message
     const messageData = JSON.parse(
-      Buffer.from(pubsubMessage.data, 'base64').toString()
+      Buffer.from(base64Data, 'base64').toString()
     );
     
     console.log('Parsed message data:', JSON.stringify(messageData, null, 2));

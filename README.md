@@ -769,6 +769,8 @@ gcloud pubsub topics create $TOPIC_NAME --project=$PROJECT_ID
 
 ### Grant Gmail Service Account Permission:
 
+**⚠️ BẮT BUỘC - PHẢI LÀM TRƯỚC KHI CHẠY `setup-gmail-watch.js`:**
+
 ```bash
 # Gmail service account email (của Google, không phải email của bạn)
 export GMAIL_SA="gmail-api-push@system.gserviceaccount.com"
@@ -780,7 +782,9 @@ gcloud pubsub topics add-iam-policy-binding $TOPIC_NAME \
     --project=$PROJECT_ID
 ```
 
-**Lưu ý:** `gmail-api-push@system.gserviceaccount.com` là service account của Google, không cần thay đổi.
+**Lưu ý:** 
+- `gmail-api-push@system.gserviceaccount.com` là service account của Google, không cần thay đổi
+- Nếu bỏ qua bước này, sẽ gặp lỗi `403 Forbidden: User not authorized to perform this action` khi chạy `setup-gmail-watch.js`
 
 ### Grant Permissions cho Build Service Account:
 
@@ -894,6 +898,15 @@ gcloud functions deploy $FUNCTION_NAME \
 
 ### Setup Gmail Watch:
 
+**⚠️ CHECKLIST TRƯỚC KHI CHẠY `setup-gmail-watch.js`:**
+
+| # | Yêu cầu | Cách kiểm tra |
+|---|---------|---------------|
+| 1 | ✅ Pub/Sub topic đã được tạo | `gcloud pubsub topics list --project=$PROJECT_ID` |
+| 2 | ✅ Gmail SA đã có quyền publish | Đã chạy `gcloud pubsub topics add-iam-policy-binding` ở trên |
+| 3 | ✅ Redirect URI đã được thêm vào OAuth Client | Console > APIs & Services > Credentials > OAuth Client > Authorized redirect URIs phải có `http://localhost:3000/oauth2callback` |
+| 4 | ✅ Email đã được thêm vào Test Users | Console > APIs & Services > OAuth consent screen > Test users |
+
 **Bước 1: Cài đặt dependencies:**
 
 ```bash
@@ -940,6 +953,61 @@ node scripts/setup-gmail-watch.js
 6. Paste vào terminal khi script hỏi
 7. Script sẽ tự động extract code và setup Gmail Watch
 8. **Script sẽ in ra REFRESH TOKEN** - copy và lưu lại
+
+**🔧 Common Errors và Solutions:**
+
+| Error | Nguyên nhân | Giải pháp |
+|-------|-------------|-----------|
+| `redirect_uri_mismatch` | Redirect URI chưa được thêm vào OAuth Client | Thêm `http://localhost:3000/oauth2callback` vào Authorized redirect URIs |
+| `access_denied` | Email chưa được thêm vào Test Users | Thêm email vào OAuth consent screen > Test users |
+| `403 Forbidden: User not authorized` | Gmail SA chưa có quyền publish | Chạy lệnh `gcloud pubsub topics add-iam-policy-binding` ở trên |
+
+<details>
+<summary><strong>🔄 Recovery Steps: Nếu Authorization thành công nhưng Gmail Watch thất bại</strong></summary>
+
+Nếu bạn thấy output như sau:
+```
+✅ Authorization successful!
+🔑 REFRESH TOKEN: 1//0gxxxxxx...
+
+Error setting up Gmail Watch: 403 Forbidden: User not authorized to perform this action.
+```
+
+**Đừng lo!** Refresh token đã được lấy thành công. Chỉ cần làm theo các bước sau:
+
+**Bước 1: Lưu Refresh Token vào Secret Manager**
+
+```bash
+export PROJECT_ID="autoland-vj"
+export REFRESH_TOKEN="1//0g..."  # Thay bằng refresh token từ output
+
+# Update secret
+echo -n "$REFRESH_TOKEN" | gcloud secrets versions add gmail-oauth-refresh-token \
+  --data-file=- \
+  --project=$PROJECT_ID
+```
+
+**Bước 2: Grant quyền cho Gmail Service Account**
+
+```bash
+export GMAIL_SA="gmail-api-push@system.gserviceaccount.com"
+export TOPIC_NAME="gmail-notifications"
+
+gcloud pubsub topics add-iam-policy-binding $TOPIC_NAME \
+    --member="serviceAccount:$GMAIL_SA" \
+    --role="roles/pubsub.publisher" \
+    --project=$PROJECT_ID
+```
+
+**Bước 3: Chạy lại script**
+
+```bash
+node scripts/setup-gmail-watch.js
+```
+
+Lần này script sẽ sử dụng refresh token đã lưu và setup Gmail Watch thành công.
+
+</details>
 
 **Output mẫu:**
 ```
@@ -1407,7 +1475,11 @@ gcloud secrets versions list gmail-oauth-refresh-token --project=$PROJECT_ID
 **Last Updated:** 2026-01-15
 
 **Changelog:**
-- **2026-01-15:** Cập nhật Bước 4 - Enable APIs trong 1 lệnh để tránh rate limit (HTTP 429)
+- **2026-01-15:** 
+  - Cập nhật Bước 4 - Enable APIs trong 1 lệnh để tránh rate limit (HTTP 429)
+  - Cập nhật Document AI region từ asia-southeast1 → us (chỉ có us/eu available)
+  - Thêm checklist và common errors cho setup-gmail-watch.js
+  - Thêm recovery steps khi Gmail Watch setup thất bại
 - **2025-01-08:** Added Gmail Watch Renewal Automation - Cloud Function + Cloud Scheduler for automatic renewal every 6 days
 - **2025-01-02:** Tách phần development sang DEVELOPMENT.md, tập trung vào production deployment với Secret Manager và OAuth2
 - **2025-12-30:** Added Hybrid PDF Parser System (pdf2json + Document AI fallback) - Cost optimization feature
