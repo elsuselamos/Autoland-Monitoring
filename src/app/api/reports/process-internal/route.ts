@@ -127,8 +127,22 @@ export async function POST(request: Request) {
       )
     }
 
-    // Step 4: Create datetime_utc from date_utc and time_utc
-    const datetimeUtc = `${parsedData.date_utc}T${parsedData.time_utc}:00Z`
+    // Step 4: Format date_utc and time_utc properly for PostgreSQL
+    // Ensure date_utc is a string in YYYY-MM-DD format
+    // Ensure time_utc is a string in HH:MM format
+    let dateUtcStr = parsedData.date_utc
+    let timeUtcStr = parsedData.time_utc
+
+    // Convert Date objects to strings if needed
+    if (dateUtcStr instanceof Date) {
+      dateUtcStr = dateUtcStr.toISOString().split('T')[0] // YYYY-MM-DD
+    }
+    if (timeUtcStr instanceof Date) {
+      timeUtcStr = timeUtcStr.toTimeString().split(' ')[0].substring(0, 5) // HH:MM
+    }
+
+    // Create datetime_utc in ISO format for PostgreSQL timestamptz
+    const datetimeUtc = `${dateUtcStr}T${timeUtcStr}:00+00`
 
     // Step 5: Insert into database with extraction metrics
     const insertResult = await db.query(
@@ -156,8 +170,8 @@ export async function POST(request: Request) {
         parsedData.runway,
         parsedData.captain,
         parsedData.first_officer,
-        parsedData.date_utc,
-        parsedData.time_utc,
+        dateUtcStr,
+        timeUtcStr,
         datetimeUtc,
         parsedData.wind_velocity,
         parsedData.td_point,
