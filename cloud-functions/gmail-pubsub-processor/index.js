@@ -74,25 +74,69 @@ exports.processGmailNotification = async (cloudEvent) => {
     console.log('Parsed message data:', JSON.stringify(messageData, null, 2));
     
     const emailAddress = messageData.emailAddress;
-    const historyId = messageData.historyId;
-    
-    if (!emailAddress || !historyId) {
+    const currentHistoryId = messageData.historyId;
+
+    if (!emailAddress || !currentHistoryId) {
       console.error('Missing emailAddress or historyId in message');
       return;
     }
-    
-    // Initialize Gmail API with OAuth2
+
+    // Get last processed history ID from storage (or use current if first run)
+    // For simplicity, we use Gmail's profile to get the current historyId
+    // and compare with what we received
     const gmail = await getGmailService();
-    
-    // Get history to find new messages
+
+    // Get current historyId from Gmail profile to verify
+    const profile = await gmail.users.getProfile({ userId: 'me' });
+    const profileHistoryId = profile.data.historyId;
+    console.log(`Current notification historyId: ${currentHistoryId}`);
+    console.log(`Gmail profile historyId: ${profileHistoryId}`);
+
+    // The notification's historyId should match or be close to profile's historyId
+    // We need to query changes since our last processed historyId
+    // For first run or if we don't have a stored lastHistoryId, we need to get it
+
+    // Strategy: Use the notification's historyId as the END point
+    // We need a START point (last processed historyId)
+    // Since we don't have persistent storage in this simple implementation,
+    // we'll use a different approach: query recent history with a limit
+
+    // Get recent history (last 100 history changes)
     const history = await gmail.users.history.list({
       userId: 'me',
-      startHistoryId: historyId,
+      startHistoryId: currentHistoryId.toString(), // Use as start to see if there's anything AFTER
       historyTypes: ['messageAdded'],
+      maxResults: 100,
     });
-    
+
+    // If no history returned, try getting history BEFORE this point
     if (!history.data.history || history.data.history.length === 0) {
-      console.log('No new messages found in history');
+      console.log('No new messages found in history (querying forward from notification historyId)');
+
+      // Alternative: Try to get profile and use a historyId slightly before
+      // This is a fallback for the initial setup
+      try {
+        // Get recent messages directly from inbox as fallback
+        console.log('Fallback: Checking recent messages in INBOX...');
+        const recentMessages = await gmail.users.messages.list({
+          userId: 'me',
+          labelIds: ['INBOX'],
+          maxResults: 10,
+        });
+
+        if (recentMessages.data.messages && recentMessages.data.messages.length > 0) {
+          console.log(`Found ${recentMessages.data.messages.length} recent messages in INBOX`);
+          // Process these recent messages
+          for (const msg of recentMessages.data.messages) {
+            await processMessage(gmail, msg.id);
+          }
+        } else {
+          console.log('No recent messages found in INBOX');
+        }
+      } catch (fallbackError) {
+        console.error('Error in fallback message fetching:', fallbackError);
+      }
+
       return;
     }
     

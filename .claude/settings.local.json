@@ -8,7 +8,11 @@
       "Bash(python:*)",
       "Bash(dir)",
       "Bash(gcloud functions deploy:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gcloud auth:*)",
+      "Bash(gcloud functions logs read:*)"
     ]
   }
 }
